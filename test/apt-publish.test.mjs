@@ -1,7 +1,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -103,10 +103,8 @@ const base = (root, extra = {}) => ({
 
 // Mirrors the publication step: durable state keeps the retained pool and the new state.json.
 function promote(root, site, state) {
-  rmSync(join(state, "pool"), { recursive: true, force: true });
-  mkdirSync(state, { recursive: true });
-  execFileSync("cp", ["-R", join(root, site, "pool"), state]);
-  execFileSync("cp", [join(root, `${site}.state.json`), join(state, "state.json")]);
+  rmSync(state, { recursive: true, force: true });
+  cpSync(join(root, `${site}.state`), state, { recursive: true });
 }
 
 async function expectExit(promise, code, pattern) {
@@ -152,10 +150,17 @@ test("decides promote, no-op, downgrade and conflict", () => {
 });
 
 test("retains current and previous version per architecture", () => {
-  const cands = new Map([["amd64", { version: "0.28.0", sha256: "c" }]]);
-  const state = { architectures: { amd64: [{ version: "0.27.0", sha256: "b" }, { version: "0.26.0", sha256: "a" }] } };
+  const cands = new Map([["amd64", { version: "0.28.0", sha256: "c", file: "x_0.28.0_amd64.deb" }]]);
+  const state = {
+    architectures: {
+      amd64: [{ version: "0.27.0", sha256: "b", file: "x_0.27.0_amd64.deb" }, { version: "0.26.0", sha256: "a", file: "x_0.26.0_amd64.deb" }],
+      arm64: [{ version: "0.27.0", sha256: "d", file: "x_0.27.0_arm64.deb" }],
+    },
+  };
+  // arm64 has no candidate: it is carried forward unchanged, not rotated.
   assert.deepEqual(nextArchitectures(state, cands), {
-    amd64: [{ version: "0.28.0", sha256: "c" }, { version: "0.27.0", sha256: "b" }],
+    amd64: [{ version: "0.28.0", sha256: "c", file: "x_0.28.0_amd64.deb" }, { version: "0.27.0", sha256: "b", file: "x_0.27.0_amd64.deb" }],
+    arm64: [{ version: "0.27.0", sha256: "d", file: "x_0.27.0_arm64.deb" }],
   });
 });
 
@@ -206,8 +211,9 @@ test("rejects retained state entries with unsafe versions or hashes before readi
   const root = scratch();
   const state = join(root, "state");
   mkdirSync(state, { recursive: true });
+  mkdirSync(join(state, "sql-pipe"));
   const write = (entry) =>
-    writeFileSync(join(state, "state.json"), JSON.stringify({ schema_version: 1, package: "sql-pipe", architectures: { amd64: [entry] } }));
+    writeFileSync(join(state, "sql-pipe", "state.json"), JSON.stringify({ schema_version: 1, package: "sql-pipe", architectures: { amd64: [{ file: "sql-pipe_0.26.0_amd64.deb", ...entry }] } }));
   write({ version: "../../escape", sha256: "a".repeat(64) });
   await expectExit(publish(base(root, { stateDir: state })), EXIT.tool, /stable X\.Y\.Z/);
   write({ version: "0.26.0", sha256: "not-a-hash" });
