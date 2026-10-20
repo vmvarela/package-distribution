@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "project": "ghoten",
+  "repo": "vmvarela/ghoten",
+  "checksums": "sha256sums.txt",
+  "channels": {
+    "apt": {
+      "repo": "vmvarela/apt-packages",
+      "package": "ghoten",
+      "architectures": ["amd64", "arm64"],
+      "assets": {
+        "amd64": "ghoten_{version}_amd64.deb",
+        "arm64": "ghoten_{version}_arm64.deb"
+      }
+    }
+  }
+}
