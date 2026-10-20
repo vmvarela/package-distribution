@@ -26,8 +26,9 @@ Fields (as implemented by `catalog/sql-pipe.json` and `scripts/validate-catalog.
 - `repo`: source repository, e.g. `vmvarela/sql-pipe`.
 - `checksums`: name of the checksum asset (`sha256sums.txt`) that every asset must match.
 - `channels`: per channel, the target repository and `assets` (architecture to file name template with `{version}`). Only `apt` is defined today.
+- `channels.apt.architectures` (optional): explicit subset of `amd64`, `arm64`, `armhf`, `i386`. Must be non-empty, unique, and match the keys of `assets` exactly. Absent means all four, as for `sql-pipe`. `ghoten` declares `amd64` and `arm64` only.
 
-Phase 1 covers `sql-pipe` only.
+Phase 1 covers `sql-pipe` and `ghoten`, APT only.
 
 ## 3. Receiver contract
 
@@ -55,6 +56,30 @@ Secrets:
 - GPG (APT, RPM) and APK signing keys live in the repository that publishes that channel, not here.
 - Missing signing key on a signed channel is a failure, not a warning.
 
+## 3a. APT durable state
+
+The durable state lives in `vmvarela/apt-packages`, not in this repository. This section is the contract that repository implements. It is not yet implemented there.
+
+Layout, read by `scripts/apt-publish.mjs --state <root>`:
+
+```text
+state/<package>/state.json
+state/<package>/pool/<file>.deb        retained .deb files of that package
+```
+
+`state.json` (schema_version 1): `{"schema_version":1,"package":"<name>","architectures":{"<arch>":[{"version":"X.Y.Z","sha256":"<hex>","file":"<name>.deb"}]}}`. Newest first, at most two entries per architecture (current and previous). Every `file` must exist in `pool/` with the recorded SHA-256; a missing or altered file fails the run.
+
+Rules:
+
+- A publish run updates one package (the triggered one) and carries forward every other package in the state unchanged. Updating sql-pipe never drops ghoten, and the reverse.
+- Retention is per package and per architecture: exactly one current and one previous version. An architecture without a new candidate is carried forward unchanged, never rotated alone.
+- The site contains every package in the state. The index for each architecture lists every package that has entries for it.
+- The publisher writes nothing to the state root. Its candidate state is `<out>.state/` with the same layout; promotion replaces the state root with it after the site is verified and deployed.
+
+Shadow mode (`--shadow`) builds the candidate from the state root and the triggered package, and refuses an output inside the state root. `scripts/apt-compare.mjs --candidate <site> --live <site>` then compares the candidate with the live site (per-architecture entries, `Release` headers and hashed files, and the candidate's signatures verified against the live `key.asc`). Any difference exits `3`. Shadow never deploys.
+
+Not part of this change: migrating the existing `apt-packages` layout to this state, the shadow workflow in `apt-packages`, cutover, and the change of the dispatch flow. Those are separate PRs and need explicit approval.
+
 ## 4. Triggering
 
 Agreed by the user:
@@ -73,7 +98,7 @@ Scheduled-workflow limits:
 Decided:
 
 1. Catalog location and format: one JSON file per project in `catalog/<project>.json` (section 2).
-2. Phase 1 is `sql-pipe` only, and APT comes first. RPM, APK, Nix and Scoop follow in later phases.
+2. Phase 1 is `sql-pipe` and `ghoten`, APT only, and APT comes first. RPM, APK, Nix and Scoop follow in later phases. RPM, APK, Nix and Scoop follow in later phases.
 3. Retention is per channel (APT keeps current and previous).
 4. Scheduled sync after 60 days of inactivity: manual re-enable, documented.
 5. Nix has a single writer for `versions.json`, not both producer and receiver.
@@ -95,9 +120,10 @@ Risks:
 
 ## 6. Validation plan (per phase)
 
-Phase 1, one channel (APT, sql-pipe):
+Phase 1, one channel (APT, sql-pipe and ghoten):
 
 - Linux CI: syntax checks, catalog tests, publisher tests with required tools (no skips), and the Docker e2e (`scripts/e2e-apt-docker.sh`) with pinned release inputs (`scripts/fetch-e2e-debs.sh`).
+- Shadow e2e (`scripts/e2e-shadow-docker.sh`): carry-forward between packages, comparison with the live site, altered pool file, and no-op. Ghoten inputs are synthetic.
 - Real install on a clean Debian/Ubuntu container with `apt`; verify the installed version and signature check (covered by the e2e).
 - Repeat trigger with the same tag: no change in published index (idempotence). Not yet tested.
 
