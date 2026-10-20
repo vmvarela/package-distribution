@@ -31,7 +31,7 @@ fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "PASS: $*"; }
 
 echo "== publisher and unit tests (dpkg-deb and gpg available)"
-node --test test/apt-publish.test.mjs >/tmp/unit.log 2>&1 || { cat /tmp/unit.log; fail "unit tests"; }
+APT_PUBLISH_TEST_REQUIRE_TOOLS=1 node --test test/apt-publish.test.mjs >/tmp/unit.log 2>&1 || { cat /tmp/unit.log; fail "unit tests"; }
 pass "node --test test/apt-publish.test.mjs"
 
 export GNUPGHOME=/root/gnupg
@@ -58,7 +58,7 @@ cp /srv/www/key.asc /etc/apt/keyrings/vmvarela-test.asc
 echo "deb [signed-by=/etc/apt/keyrings/vmvarela-test.asc] http://127.0.0.1:8080 stable main" > /etc/apt/sources.list.d/vmvarela-test.list
 apt-get update -qq >/dev/null 2>&1 || fail "apt update after 0.26.0"
 apt-get install -y -qq sql-pipe=0.26.0 >/dev/null 2>&1 || fail "install 0.26.0"
-v=$(sql-pipe --version 2>&1) || true
+v=$(sql-pipe --version 2>&1) || fail "sql-pipe --version failed: [$v]"
 case "$v" in *0.26.0*) ;; *) fail "installed version is not 0.26.0: [$v]" ;; esac
 pass "installed sql-pipe 0.26.0 from the signed index"
 
@@ -67,7 +67,7 @@ publish 0.27.0 src/0.27.0 out-0.27.0 || fail "publish 0.27.0"
 promote out-0.27.0
 apt-get update -qq >/dev/null 2>&1 || fail "apt update after 0.27.0"
 apt-get install -y -qq sql-pipe >/dev/null 2>&1 || fail "upgrade to 0.27.0"
-v=$(sql-pipe --version 2>&1) || true
+v=$(sql-pipe --version 2>&1) || fail "sql-pipe --version failed: [$v]"
 case "$v" in *0.27.0*) ;; *) fail "installed version is not 0.27.0: [$v]" ;; esac
 pass "upgraded to 0.27.0"
 

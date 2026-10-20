@@ -1,6 +1,6 @@
 # Shared package receivers: design
 
-Status: proposal. Nothing here is implemented yet.
+Status: proposal. Implemented locally: the APT publisher (`scripts/apt-publish.mjs`) and its manual Docker e2e check. Pending: real publication, GitHub Pages, CI, promotion, and RPM/APK/Nix/Scoop receivers.
 
 ## 1. Current problem
 

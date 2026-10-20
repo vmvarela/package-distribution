@@ -2,7 +2,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, readdir, rm, writeFile, mkdir, copyFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -12,6 +12,7 @@ import { validateCatalog } from "./validate-catalog.mjs";
 
 const run = promisify(execFile);
 const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+const SHA256 = /^[0-9a-f]{64}$/;
 const RETAIN = 2;
 const SUITE = "stable";
 export const EXIT = { tool: 1, version: 2, verify: 3 };
@@ -33,8 +34,12 @@ const digests = (buf) => ({
 
 export function parseVersion(version) {
   const m = VERSION.exec(version);
-  if (!m) throw new PublishError(`version must be a stable X.Y.Z: "${version}"`, EXIT.tool);
-  return m.slice(1).map(Number);
+  // Components above MAX_SAFE_INTEGER would lose precision in comparisons.
+  const parts = m ? m.slice(1).map(Number) : [];
+  if (!m || parts.some((n) => n > Number.MAX_SAFE_INTEGER)) {
+    throw new PublishError(`version must be a stable X.Y.Z: "${version}"`, EXIT.tool);
+  }
+  return parts;
 }
 
 export function compareVersions(a, b) {
@@ -113,13 +118,13 @@ export function buildRelease({ origin, date, arches, files }) {
 }
 
 export function selectArches(catalog, requested, testSubset) {
-  const assets = catalog.channels.apt.assets;
-  const all = ["amd64", "arm64", "armhf", "i386"];
+  const all = Object.keys(catalog.channels.apt.assets);
   if (!requested) return all;
   const arches = requested.split(",").map((a) => a.trim());
   for (const arch of arches) {
-    if (!(arch in assets)) throw new PublishError(`architecture "${arch}" is not in the catalog`, EXIT.tool);
+    if (!all.includes(arch)) throw new PublishError(`architecture "${arch}" is not in the catalog`, EXIT.tool);
   }
+  if (new Set(arches).size !== arches.length) throw new PublishError(`duplicate architecture in "${requested}"`, EXIT.tool);
   if (arches.length !== all.length && !testSubset) {
     throw new PublishError("partial architectures are test-only: pass --test-subset explicitly", EXIT.tool);
   }
@@ -151,7 +156,27 @@ async function readState(stateDir, pkg) {
   if (!existsSync(file)) return null;
   const state = JSON.parse(await readFile(file, "utf8"));
   if (state.schema_version !== 1 || state.package !== pkg) throw new PublishError(`unexpected state file: ${file}`, EXIT.tool);
+  // Retained versions become path segments and hashes are compared: validate every entry before use.
+  for (const entries of Object.values(state.architectures ?? {})) {
+    if (!Array.isArray(entries)) throw new PublishError(`unexpected state file: ${file}`, EXIT.tool);
+    for (const e of entries) {
+      parseVersion(e.version);
+      if (!SHA256.test(e.sha256)) throw new PublishError(`unexpected state file: ${file}`, EXIT.tool);
+    }
+  }
   return state;
+}
+
+// Verifies metadata from a private copy of the bytes that were checksummed, never from the source path.
+async function withSnapshot(buf, fn) {
+  const dir = await mkdtemp(join(tmpdir(), "apt-publish-"));
+  try {
+    const file = join(dir, "snapshot.deb");
+    await writeFile(file, buf);
+    return await fn(file);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 // Pure-ish orchestration: every check runs before the first write to out.
@@ -160,11 +185,14 @@ export async function publish({ catalog, version, sourceDir, out, stateDir, rele
   const errors = validateCatalog(catalog);
   if (errors.length) throw new PublishError(errors.join("; "), EXIT.tool);
   if (!gpgKeyId) throw new PublishError("GPG_KEY_ID is required to sign the index", EXIT.tool);
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(releaseDate) || Number.isNaN(Date.parse(`${releaseDate}T00:00:00Z`))) {
+  const when = new Date(`${releaseDate}T00:00:00Z`);
+  // Round-trip rejects dates JS would normalize, such as 2026-02-30.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(releaseDate) || Number.isNaN(when.getTime()) || when.toISOString().slice(0, 10) !== releaseDate) {
     throw new PublishError("release date must be a real YYYY-MM-DD date", EXIT.tool);
   }
   const apt = catalog.channels.apt;
   const selected = selectArches(catalog, arches, testSubset);
+  const state = await readState(stateDir, apt.package);
 
   let sums;
   try {
@@ -187,17 +215,19 @@ export async function publish({ catalog, version, sourceDir, out, stateDir, rele
     if (!sums.has(name)) throw new PublishError(`not listed in ${catalog.checksums}: ${name}`, EXIT.verify);
     const hash = sha256(buf);
     if (hash !== sums.get(name)) throw new PublishError(`sha256 mismatch: ${name}`, EXIT.verify);
-    candidates.set(arch, { version, sha256: hash, name, path });
+    candidates.set(arch, { version, sha256: hash, name, buf });
   }
   for (const [arch, cand] of candidates) {
-    const [pkg, ver, debArch] = (await dpkg(["--showformat=${Package} ${Version} ${Architecture}", "--show", cand.path])).trim().split(" ");
+    const fields = await withSnapshot(cand.buf, (file) => dpkg(["--showformat=${Package} ${Version} ${Architecture}", "--show", file]));
+    const [pkg, ver, debArch] = fields.trim().split(" ");
     if (pkg !== apt.package || ver !== version || debArch !== arch) {
       throw new PublishError(`${cand.name}: control is ${pkg} ${ver} ${debArch}, expected ${apt.package} ${version} ${arch}`, EXIT.verify);
     }
   }
 
-  const state = await readState(stateDir, apt.package);
   const action = decideAction(state, candidates);
+  // Nothing to publish: the site is not regenerated or re-signed.
+  if (action === "noop") return { action, version };
   const stateOut = `${out}.state.json`;
 
   if (existsSync(out) && (await readdir(out)).length) throw new PublishError(`${out} is not empty; remove it before publishing`, EXIT.tool);
@@ -211,7 +241,7 @@ export async function publish({ catalog, version, sourceDir, out, stateDir, rele
       const name = assetName(catalog, entry.version, arch);
       const dest = join(pool, name);
       if (entry.version === version) {
-        await copyFile(candidates.get(arch).path, dest);
+        await writeFile(dest, candidates.get(arch).buf);
         continue;
       }
       const prev = join(stateDir, poolDir(apt.package), name);
@@ -315,6 +345,8 @@ async function main(argv) {
     if (!a[key]) throw new PublishError(`missing --${key}`, EXIT.tool);
   }
   const catalog = JSON.parse(await readFile(a.catalog, "utf8"));
+  const catalogErrors = validateCatalog(catalog);
+  if (catalogErrors.length) throw new PublishError(catalogErrors.join("; "), EXIT.tool);
   parseVersion(a.version);
   const arches = selectArches(catalog, a.arches, a.testSubset);
   const names = [catalog.checksums, ...arches.map((arch) => assetName(catalog, a.version, arch))];

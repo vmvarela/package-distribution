@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -19,8 +19,17 @@ import {
 const catalog = JSON.parse(readFileSync(new URL("../catalog/sql-pipe.json", import.meta.url), "utf8"));
 const ARCHES = ["amd64", "arm64", "armhf", "i386"];
 const hasTool = (cmd, args) => spawnSync(cmd, args).error === undefined;
-const hasDpkg = hasTool("dpkg-deb", ["--version"]);
-const hasGpg = hasTool("gpg", ["--version"]);
+// APT_PUBLISH_TEST_REQUIRE_TOOLS=1 (set in validation) turns a missing tool into a failure instead of a skip.
+const REQUIRE_TOOLS = process.env.APT_PUBLISH_TEST_REQUIRE_TOOLS === "1";
+function toolGate(tools) {
+  const missing = tools.filter((t) => spawnSync(t, ["--version"]).error !== undefined);
+  return {
+    skip: missing.length && !REQUIRE_TOOLS ? `needs ${missing.join(" and ")}` : false,
+    check: () => assert.equal(missing.length, 0, `required tools missing: ${missing.join(", ")}`),
+  };
+}
+const fullGate = toolGate(["dpkg-deb", "gpg"]);
+const debGate = toolGate(["dpkg-deb"]);
 const scratch = () => mkdtempSync(join(process.env.TMPDIR || tmpdir(), "apt-publish-test-"));
 const name = (arch, version) => catalog.channels.apt.assets[arch].replace("{version}", version);
 
@@ -60,6 +69,20 @@ function realRelease(dir, version) {
   return dir;
 }
 
+// Like realRelease, but each file is named for the release while its control fields come from control(arch) = [version, arch].
+function releaseWithControl(dir, version, control) {
+  mkdirSync(join(dir, "build"), { recursive: true });
+  const lines = [];
+  for (const arch of ARCHES) {
+    const [v, a] = control(arch);
+    const file = join(dir, name(arch, version));
+    renameSync(makeDeb(join(dir, "build"), v, a), file);
+    lines.push(`${sha256(readFileSync(file))}  ${name(arch, version)}`);
+  }
+  writeFileSync(join(dir, catalog.checksums), `${lines.join("\n")}\n`);
+  return dir;
+}
+
 const base = (root, extra = {}) => ({
   catalog,
   version: "0.27.0",
@@ -89,7 +112,8 @@ async function expectExit(promise, code, pattern) {
 
 test("accepts only stable X.Y.Z versions", () => {
   assert.deepEqual(parseVersion("0.27.0"), [0, 27, 0]);
-  for (const bad of ["0.27.0-rc1", "v0.27.0", "../0.27.0", "1.2", "01.2.3", "1.2.3+build"]) {
+  assert.deepEqual(parseVersion("9007199254740991.0.0"), [Number.MAX_SAFE_INTEGER, 0, 0]);
+  for (const bad of ["0.27.0-rc1", "v0.27.0", "../0.27.0", "1.2", "01.2.3", "1.2.3+build", "9007199254740992.0.0", "1.99999999999999999999.0"]) {
     assert.throws(() => parseVersion(bad), /stable X\.Y\.Z/, bad);
   }
 });
@@ -153,12 +177,58 @@ test("rejects bad versions, unknown architectures and partial sets without the t
   writeRelease(join(root, "src"), "0.27.0");
   await expectExit(publish(base(root, { version: "0.27.0-rc1" })), EXIT.tool, /stable X\.Y\.Z/);
   await expectExit(publish(base(root, { arches: "amd64" })), EXIT.tool, /--test-subset/);
+  await expectExit(publish(base(root, { arches: "amd64,arm64,armhf,riscv" })), EXIT.tool, /not in the catalog/);
+});
+
+test("rejects duplicate architectures, even with the test flag", async () => {
+  const root = scratch();
+  writeRelease(join(root, "src"), "0.27.0");
+  await expectExit(publish(base(root, { arches: "amd64,amd64,amd64,amd64" })), EXIT.tool, /duplicate/);
+  await expectExit(publish(base(root, { arches: "amd64,amd64,arm64,armhf" })), EXIT.tool, /duplicate/);
+  await expectExit(publish(base(root, { arches: "amd64,amd64", testSubset: true })), EXIT.tool, /duplicate/);
+});
+
+test("rejects impossible release dates", async () => {
+  const root = scratch();
+  writeRelease(join(root, "src"), "0.27.0");
+  await expectExit(publish(base(root, { releaseDate: "2026-02-30" })), EXIT.tool, /real YYYY-MM-DD/);
+  assert.equal(existsSync(join(root, "out")), false);
+});
+
+test("rejects retained state entries with unsafe versions or hashes before reading any source", async () => {
+  const root = scratch();
+  const state = join(root, "state");
+  mkdirSync(state, { recursive: true });
+  const write = (entry) =>
+    writeFileSync(join(state, "state.json"), JSON.stringify({ schema_version: 1, package: "sql-pipe", architectures: { amd64: [entry] } }));
+  write({ version: "../../escape", sha256: "a".repeat(64) });
+  await expectExit(publish(base(root, { stateDir: state })), EXIT.tool, /stable X\.Y\.Z/);
+  write({ version: "0.26.0", sha256: "not-a-hash" });
+  await expectExit(publish(base(root, { stateDir: state })), EXIT.tool, /unexpected state file/);
 });
 
 test(
-  "publishes a signed site, keeps two versions, and refuses downgrades",
-  { skip: hasDpkg && hasGpg ? false : "needs dpkg-deb and gpg" },
+  "rejects .deb control metadata that does not match the release",
+  { skip: debGate.skip },
   async () => {
+    debGate.check();
+    const root = scratch();
+    // amd64 claims 0.26.0 under the 0.27.0 file name.
+    const wrongVersion = releaseWithControl(join(root, "src"), "0.27.0", (arch) => [arch === "amd64" ? "0.26.0" : "0.27.0", arch]);
+    await expectExit(publish(base(root, { sourceDir: wrongVersion })), EXIT.verify, /control is sql-pipe 0.26.0 amd64, expected sql-pipe 0.27.0 amd64/);
+    // armhf file carries an arm64 control record.
+    const wrongArch = releaseWithControl(join(root, "src2"), "0.27.0", (arch) => ["0.27.0", arch === "armhf" ? "arm64" : arch]);
+    await expectExit(publish(base(root, { sourceDir: wrongArch, out: join(root, "out2") })), EXIT.verify, /control is sql-pipe 0.27.0 arm64, expected sql-pipe 0.27.0 armhf/);
+    assert.equal(existsSync(join(root, "out")), false);
+    assert.equal(existsSync(join(root, "out2")), false);
+  },
+);
+
+test(
+  "publishes a signed site, keeps two versions, and refuses downgrades",
+  { skip: fullGate.skip },
+  async () => {
+    fullGate.check();
     const root = scratch();
     const oldHome = process.env.GNUPGHOME;
     process.env.GNUPGHOME = join(root, "gnupg");
@@ -191,6 +261,7 @@ test(
       promote(root, "o27", state);
       const again = base(root, { version: "0.27.0", sourceDir: join(root, "r27"), out: join(root, "o27b"), stateDir: state });
       assert.equal((await publish(again)).action, "noop");
+      assert.equal(existsSync(join(root, "o27b")), false, "noop must not regenerate or sign a site");
     } finally {
       process.env.GNUPGHOME = oldHome;
       rmSync(root, { recursive: true, force: true });
