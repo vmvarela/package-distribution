@@ -411,6 +411,14 @@ test("retention keeps exactly current and previous per package and architecture"
   });
 });
 
+test("refuses a legacy flat state layout instead of ignoring it", async () => {
+  const root = scratch();
+  const state = join(root, "state");
+  mkdirSync(state, { recursive: true });
+  writeFileSync(join(state, "state.json"), JSON.stringify({ schema_version: 1, package: "sql-pipe", architectures: {} }));
+  await expectExit(publish(base(root, { stateDir: state })), EXIT.tool, /legacy flat state layout/);
+});
+
 test("a retained pool file missing from state fails before anything is complete", { skip: fullGate.skip }, async () => {
   fullGate.check();
   const root = scratch();

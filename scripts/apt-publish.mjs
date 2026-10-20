@@ -180,6 +180,8 @@ async function readState(stateRoot, pkg) {
 async function readStates(stateRoot) {
   const states = new Map();
   if (!existsSync(stateRoot)) return states;
+  // A flat legacy state would be ignored, and its downgrade checks lost: refuse instead.
+  if (existsSync(join(stateRoot, "state.json"))) throw new PublishError("legacy flat state layout: migrate to <package>/state.json first", EXIT.tool);
   for (const entry of await readdir(stateRoot, { withFileTypes: true })) {
     if (!entry.isDirectory() || !NAME.test(entry.name)) continue;
     const state = await readState(stateRoot, entry.name);
