@@ -5,6 +5,7 @@ import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
+import { parseStanzas, verifySignatures, compareSites } from "../scripts/apt-compare.mjs";
 import {
   EXIT,
   compareVersions,
@@ -52,15 +53,16 @@ function writeRelease(dir, version, contents = () => Buffer.from(`fake ${version
   return dir;
 }
 
-function makeDeb(dir, version, arch) {
-  const stage = join(dir, `stage-${arch}-${version}`);
+function makeDeb(dir, version, arch, cat = catalog) {
+  const file = cat.channels.apt.assets[arch].replace("{version}", version);
+  const stage = join(dir, `stage-${cat.project}-${arch}-${version}`);
   mkdirSync(join(stage, "DEBIAN"), { recursive: true });
   writeFileSync(
     join(stage, "DEBIAN", "control"),
-    `Package: sql-pipe\nVersion: ${version}\nArchitecture: ${arch}\nMaintainer: t <t@invalid>\nDescription: test package\n`,
+    `Package: ${cat.channels.apt.package}\nVersion: ${version}\nArchitecture: ${arch}\nMaintainer: t <t@invalid>\nDescription: test package\n`,
   );
   writeFileSync(join(stage, "usr-marker"), version);
-  const out = join(dir, name(arch, version));
+  const out = join(dir, file);
   execFileSync("dpkg-deb", ["--root-owner-group", "--build", stage, out], { stdio: "ignore" });
   return out;
 }
@@ -275,6 +277,7 @@ test(
       const again = base(root, { version: "0.27.0", sourceDir: join(root, "r27"), out: join(root, "o27b"), stateDir: state });
       assert.equal((await publish(again)).action, "noop");
       assert.equal(existsSync(join(root, "o27b")), false, "noop must not regenerate or sign a site");
+      assert.equal(existsSync(join(root, "o27b.state")), false, "noop must not write candidate state");
     } finally {
       process.env.GNUPGHOME = oldHome;
       rmSync(root, { recursive: true, force: true });
@@ -311,4 +314,172 @@ test("github source removes its temp dir when an asset is missing", async () => 
     await assert.rejects(downloadRelease({ repo: "o/r", version: "0.27.0", names: ["sha256sums.txt"] }), /missing asset: sha256sums.txt/);
   });
   assert.equal(tmpPublishDirs(), before);
+});
+
+// Multi-package state: sql-pipe (four arches) and ghoten (amd64 and arm64 only) share one site and one state root.
+const ghotenCatalog = JSON.parse(readFileSync(new URL("../catalog/ghoten.json", import.meta.url), "utf8"));
+const fileFor = (cat, arch, version) => cat.channels.apt.assets[arch].replace("{version}", version);
+
+function packageRelease(dir, cat, version) {
+  mkdirSync(dir, { recursive: true });
+  const lines = [];
+  for (const arch of Object.keys(cat.channels.apt.assets)) {
+    const file = makeDeb(dir, version, arch, cat);
+    lines.push(`${sha256(readFileSync(file))}  ${fileFor(cat, arch, version)}`);
+  }
+  writeFileSync(join(dir, cat.checksums), `${lines.join("\n")}\n`);
+  return dir;
+}
+
+// Runs fn with an isolated keyring; the signing key is generated once per test root.
+async function withGpg(root, fn) {
+  const oldHome = process.env.GNUPGHOME;
+  process.env.GNUPGHOME = join(root, "gnupg");
+  mkdirSync(process.env.GNUPGHOME, { mode: 0o700 });
+  try {
+    execFileSync("gpg", ["--batch", "--pinentry-mode", "loopback", "--passphrase", "", "--quick-gen-key", "test@invalid", "default", "default", "never"], { stdio: "ignore" });
+    return await fn();
+  } finally {
+    process.env.GNUPGHOME = oldHome;
+  }
+}
+
+// Publishes one package version from a fresh release. Returns the out dir (candidate state is out + ".state").
+function publishPkg(root, cat, version, { stateDir, out, shadow = false } = {}) {
+  const target = out ?? join(root, "out", `${cat.project}-${version}-${Math.random().toString(36).slice(2, 8)}`);
+  return publish({
+    catalog: cat,
+    version,
+    sourceDir: packageRelease(join(root, "src", `${cat.project}-${version}`), cat, version),
+    out: target,
+    stateDir: stateDir ?? join(root, "state"),
+    releaseDate: "2026-10-20",
+    gpgKeyId: "test@invalid",
+    shadow,
+  }).then((result) => ({ ...result, out: target }));
+}
+
+// Adopts a candidate as the durable state, as the publication step would.
+function promoteOut(out, state) {
+  rmSync(state, { recursive: true, force: true });
+  cpSync(`${out}.state`, state, { recursive: true });
+}
+
+const packagesOf = (site, arch) =>
+  parseStanzas(readFileSync(join(site, "dists", "stable", "main", `binary-${arch}`, "Packages"), "utf8")).map((p) => `${p.Package} ${p.Version}`);
+const releaseArches = (site) => /^Architectures: (.*)$/m.exec(readFileSync(join(site, "dists", "stable", "Release"), "utf8"))[1];
+
+test("multi-package: each publish keeps the other package from state", { skip: fullGate.skip }, async () => {
+  fullGate.check();
+  const root = scratch();
+  await withGpg(root, async () => {
+    const state = join(root, "state");
+    const sp26 = await publishPkg(root, catalog, "0.26.0");
+    promoteOut(sp26.out, state);
+    const gh = await publishPkg(root, ghotenCatalog, "1.13.1");
+    assert.deepEqual(packagesOf(gh.out, "amd64").sort(), ["ghoten 1.13.1", "sql-pipe 0.26.0"]);
+    assert.deepEqual(packagesOf(gh.out, "armhf"), ["sql-pipe 0.26.0"], "ghoten has no armhf entry");
+    assert.equal(releaseArches(gh.out), "amd64 arm64 armhf i386");
+    promoteOut(gh.out, state);
+
+    const sp27 = await publishPkg(root, catalog, "0.27.0");
+    assert.deepEqual(packagesOf(sp27.out, "arm64").sort(), ["ghoten 1.13.1", "sql-pipe 0.26.0", "sql-pipe 0.27.0"]);
+    assert.ok(existsSync(join(sp27.out, "pool", "main", "g", "ghoten", "ghoten_1.13.1_arm64.deb")), "ghoten pool file carried");
+    promoteOut(sp27.out, state);
+
+    const gh2 = await publishPkg(root, ghotenCatalog, "1.14.0");
+    assert.deepEqual(packagesOf(gh2.out, "amd64").sort(), ["ghoten 1.13.1", "ghoten 1.14.0", "sql-pipe 0.26.0", "sql-pipe 0.27.0"]);
+    assert.deepEqual(packagesOf(gh2.out, "i386").sort(), ["sql-pipe 0.26.0", "sql-pipe 0.27.0"]);
+  });
+});
+
+test("retention keeps exactly current and previous per package and architecture", { skip: fullGate.skip }, async () => {
+  fullGate.check();
+  const root = scratch();
+  await withGpg(root, async () => {
+    const state = join(root, "state");
+    for (const v of ["0.26.0", "0.27.0", "0.28.0"]) promoteOut((await publishPkg(root, catalog, v, { stateDir: state })).out, state);
+    for (const v of ["1.13.1", "1.13.2", "1.13.3"]) promoteOut((await publishPkg(root, ghotenCatalog, v, { stateDir: state })).out, state);
+
+    const sp = JSON.parse(readFileSync(join(state, "sql-pipe", "state.json"), "utf8"));
+    const gh = JSON.parse(readFileSync(join(state, "ghoten", "state.json"), "utf8"));
+    for (const arch of ["amd64", "arm64", "armhf", "i386"]) assert.deepEqual(sp.architectures[arch].map((e) => e.version), ["0.28.0", "0.27.0"], arch);
+    for (const arch of ["amd64", "arm64"]) assert.deepEqual(gh.architectures[arch].map((e) => e.version), ["1.13.3", "1.13.2"], arch);
+    assert.equal(Object.keys(gh.architectures).length, 2);
+    assert.equal(readdirSync(join(state, "sql-pipe", "pool")).length, 8, "two versions for four architectures");
+    assert.equal(readdirSync(join(state, "ghoten", "pool")).length, 4, "two versions for two architectures");
+  });
+});
+
+test("a retained pool file missing from state fails before anything is complete", { skip: fullGate.skip }, async () => {
+  fullGate.check();
+  const root = scratch();
+  await withGpg(root, async () => {
+    const state = join(root, "state");
+    promoteOut((await publishPkg(root, catalog, "0.26.0", { stateDir: state })).out, state);
+    promoteOut((await publishPkg(root, ghotenCatalog, "1.13.1", { stateDir: state })).out, state);
+    rmSync(join(state, "ghoten", "pool", "ghoten_1.13.1_arm64.deb"));
+    // sql-pipe is the triggered package; the missing ghoten file is carried forward and must still fail.
+    const out = join(root, "out-missing");
+    await expectExit(publishPkg(root, catalog, "0.27.0", { stateDir: state, out }), EXIT.verify, /retained package missing from state: ghoten_1.13.1_arm64.deb/);
+    assert.equal(existsSync(join(out, ".complete")), false);
+  });
+});
+
+test("shadow mode writes only to out and its candidate state, never to the state root", { skip: fullGate.skip }, async () => {
+  fullGate.check();
+  const root = scratch();
+  await withGpg(root, async () => {
+    const state = join(root, "state");
+    promoteOut((await publishPkg(root, catalog, "0.26.0", { stateDir: state })).out, state);
+    const before = execFileSync("find", [state, "-type", "f", "-exec", "shasum", "-a", "256", "{}", ";"]).toString();
+    const out = join(root, "shadow-out");
+    const r = await publishPkg(root, catalog, "0.27.0", { stateDir: state, out, shadow: true });
+    assert.equal(r.action, "promote");
+    assert.match(readFileSync(join(out, ".complete"), "utf8"), /^shadow promote 0.27.0\n$/);
+    assert.ok(existsSync(join(`${out}.state`, "sql-pipe", "state.json")));
+    assert.equal(execFileSync("find", [state, "-type", "f", "-exec", "shasum", "-a", "256", "{}", ";"]).toString(), before, "state root untouched");
+    await expectExit(publish(base(root, { shadow: true, out: join(state, "inside"), stateDir: state })), EXIT.tool, /inside the state directory/);
+  });
+});
+
+test("compare reports a missing package and a changed hash, and verifies the signature", { skip: fullGate.skip }, async () => {
+  fullGate.check();
+  const root = scratch();
+  await withGpg(root, async () => {
+    const state = join(root, "state");
+    const live = (await publishPkg(root, catalog, "0.26.0", { stateDir: state })).out;
+    promoteOut(live, state);
+    const withGhoten = (await publishPkg(root, ghotenCatalog, "1.13.1", { stateDir: state })).out;
+
+    const missing = await compareSites(live, withGhoten);
+    assert.ok(missing.includes("amd64: missing in candidate: ghoten 1.13.1"), missing.join("\n"));
+    const extra = await compareSites(withGhoten, live);
+    assert.ok(extra.includes("amd64: only in candidate: ghoten 1.13.1"), extra.join("\n"));
+    assert.deepEqual(await verifySignatures(withGhoten, join(live, "key.asc")), []);
+
+    // A candidate whose index names a different hash for the same .deb is a difference, not a match.
+    const tampered = join(root, "tampered");
+    cpSync(live, tampered, { recursive: true });
+    const packages = join(tampered, "dists", "stable", "main", "binary-amd64", "Packages");
+    writeFileSync(packages, readFileSync(packages, "utf8").replace(/^SHA256: [0-9a-f]{64}$/m, `SHA256: ${"0".repeat(64)}`));
+    assert.ok((await compareSites(tampered, live)).some((d) => /SHA256 changed/.test(d)));
+    assert.equal(spawnSync("node", [new URL("../scripts/apt-compare.mjs", import.meta.url).pathname, "--candidate", tampered, "--live", live]).status, 3);
+    assert.equal(spawnSync("node", [new URL("../scripts/apt-compare.mjs", import.meta.url).pathname, "--candidate", live, "--live", live]).status, 0);
+
+    // A forged release signature is rejected by the live key.
+    const forged = join(root, "forged");
+    cpSync(live, forged, { recursive: true });
+    writeFileSync(join(forged, "dists", "stable", "Release"), readFileSync(join(forged, "dists", "stable", "Release"), "utf8") + "Forged: yes\n");
+    assert.ok((await verifySignatures(forged, join(live, "key.asc"))).length > 0);
+  });
+});
+
+test("ghoten architecture subset is enforced at publish time", async () => {
+  const root = scratch();
+  writeRelease(join(root, "src"), "0.27.0");
+  const gh = { catalog: ghotenCatalog, version: "1.13.1", sourceDir: join(root, "src"), out: join(root, "o"), stateDir: join(root, "s"), releaseDate: "2026-10-20", gpgKeyId: "test@invalid" };
+  await expectExit(publish({ ...gh, arches: "amd64,arm64,armhf" }), EXIT.tool, /not in the catalog/);
+  await expectExit(publish({ ...gh, arches: "amd64" }), EXIT.tool, /--test-subset/);
+  assert.equal(existsSync(join(root, "o")), false);
 });
