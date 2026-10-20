@@ -24,10 +24,13 @@ for v in 0.26.0 0.27.0; do
 done
 
 docker run --rm -i --platform "$PLATFORM" \
+  -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" \
   -v "$ROOT:/work/repo:ro" \
   -v "$WORK:/work/data" \
   "$IMAGE" bash -s <<'CONTAINER'
 set -eu
+# The container runs as root; hand the work tree back to the host user so the host can remove it.
+trap 'chown -R "$HOST_UID:$HOST_GID" /work/data 2>/dev/null || true' EXIT
 export DEBIAN_FRONTEND=noninteractive TMPDIR=/tmp
 apt-get update -qq >/dev/null
 apt-get install -y -qq nodejs gnupg python3 ca-certificates >/dev/null
