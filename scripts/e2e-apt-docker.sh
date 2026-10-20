@@ -1,20 +1,26 @@
 #!/usr/bin/env bash
-# Manual end-to-end check of the APT receiver in a clean Debian container. Not wired into CI.
+# End-to-end check of the APT receiver in a clean Debian container. Runs in CI (ci.yml) and locally.
 # Test-only exception: amd64 is the only architecture published (--arches amd64 --test-subset).
 # Production runs require all four catalog architectures.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DEBS="${APT_E2E_DEBS:-${TMPDIR%/}/apt-test}"
+DEBS="${APT_E2E_DEBS:-${TMPDIR:-/tmp}/apt-test}"
 PLATFORM="${APT_E2E_PLATFORM:-linux/amd64}"
 IMAGE="${APT_E2E_IMAGE:-debian:stable-slim}"
-WORK="$(mktemp -d "${TMPDIR%/}/apt-e2e.XXXXXX")"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/apt-e2e.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
+# Fetches the pinned release .deb inputs when they are missing (public assets, no auth).
+for v in 0.26.0 0.27.0; do
+  [ -f "$DEBS/sql-pipe_${v}_amd64.deb" ] || "$ROOT/scripts/fetch-e2e-debs.sh"
+done
+
+sha256_file() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
 for v in 0.26.0 0.27.0; do
   mkdir -p "$WORK/src/$v"
   cp "$DEBS/sql-pipe_${v}_amd64.deb" "$WORK/src/$v/"
-  (cd "$WORK/src/$v" && shasum -a 256 "sql-pipe_${v}_amd64.deb" > sha256sums.txt)
+  (cd "$WORK/src/$v" && sha256_file "sql-pipe_${v}_amd64.deb" > sha256sums.txt)
 done
 
 docker run --rm -i --platform "$PLATFORM" \

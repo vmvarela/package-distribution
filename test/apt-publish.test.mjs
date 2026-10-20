@@ -1,7 +1,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
@@ -9,6 +9,7 @@ import {
   EXIT,
   compareVersions,
   decideAction,
+  downloadRelease,
   nextArchitectures,
   parseSha256Sums,
   parseVersion,
@@ -274,3 +275,34 @@ test(
     }
   },
 );
+
+// Stubs fetch for the GitHub release API and asset URLs; restores the original afterwards.
+async function withFakeGitHub(release, fn) {
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes("/releases/tags/")) return new Response(JSON.stringify(release));
+    return new Response(Buffer.from("bytes"));
+  };
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = original;
+  }
+}
+const tmpPublishDirs = () => readdirSync(process.env.TMPDIR || tmpdir()).filter((n) => n.startsWith("apt-publish-")).length;
+
+test("github source refuses draft and prerelease releases", async () => {
+  for (const flag of ["draft", "prerelease"]) {
+    await withFakeGitHub({ [flag]: true, assets: [] }, async () => {
+      await assert.rejects(downloadRelease({ repo: "o/r", version: "0.27.0", names: [] }), (e) => e.exitCode === EXIT.verify && /draft or prerelease/.test(e.message));
+    });
+  }
+});
+
+test("github source removes its temp dir when an asset is missing", async () => {
+  const before = tmpPublishDirs();
+  await withFakeGitHub({ assets: [] }, async () => {
+    await assert.rejects(downloadRelease({ repo: "o/r", version: "0.27.0", names: ["sha256sums.txt"] }), /missing asset: sha256sums.txt/);
+  });
+  assert.equal(tmpPublishDirs(), before);
+});

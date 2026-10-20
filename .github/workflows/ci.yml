@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate catalog and APT publisher
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Install dpkg and gpg
+        run: sudo apt-get update && sudo apt-get install -y dpkg-dev dpkg gnupg
+      - name: Syntax checks
+        run: |
+          for f in scripts/*.mjs; do node --check "$f"; done
+          bash -n scripts/*.sh
+      - name: Catalog unit tests
+        run: node --test test/validate-catalog.test.mjs
+      - name: Validate catalog
+        run: node scripts/validate-catalog.mjs catalog/*.json
+      - name: APT publisher tests (no skips)
+        env:
+          APT_PUBLISH_TEST_REQUIRE_TOOLS: "1"
+        run: node --test test/apt-publish.test.mjs
+
+  apt-e2e:
+    name: APT Docker end-to-end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Fetch pinned sql-pipe inputs
+        env:
+          APT_E2E_DEBS: ${{ runner.temp }}/apt-test
+        run: scripts/fetch-e2e-debs.sh
+      - name: Run e2e in debian:stable-slim
+        env:
+          APT_E2E_DEBS: ${{ runner.temp }}/apt-test
+        run: scripts/e2e-apt-docker.sh

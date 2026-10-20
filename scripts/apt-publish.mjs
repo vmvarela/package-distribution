@@ -293,13 +293,19 @@ export async function publish({ catalog, version, sourceDir, out, stateDir, rele
 }
 
 export async function downloadRelease({ repo, version, names }) {
-  const dir = await mkdtemp(join(tmpdir(), "apt-publish-"));
   const api = `https://api.github.com/repos/${repo}/releases/tags/v${version}`;
   const release = await fetchJson(api);
-  for (const name of names) {
-    const asset = release.assets?.find((a) => a.name === name);
-    if (!asset) throw new PublishError(`missing asset: ${name}`, EXIT.verify);
-    await writeFile(join(dir, name), await fetchBytes(asset.browser_download_url));
+  if (release.draft || release.prerelease) throw new PublishError(`release v${version} is a draft or prerelease`, EXIT.verify);
+  const dir = await mkdtemp(join(tmpdir(), "apt-publish-"));
+  try {
+    for (const name of names) {
+      const asset = release.assets?.find((a) => a.name === name);
+      if (!asset) throw new PublishError(`missing asset: ${name}`, EXIT.verify);
+      await writeFile(join(dir, name), await fetchBytes(asset.browser_download_url));
+    }
+  } catch (e) {
+    await rm(dir, { recursive: true, force: true });
+    throw e;
   }
   return dir;
 }
