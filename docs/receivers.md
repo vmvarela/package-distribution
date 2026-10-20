@@ -1,6 +1,6 @@
 # Shared package receivers: design
 
-Status: proposal. Implemented locally: the APT publisher (`scripts/apt-publish.mjs`) and its manual Docker e2e check. Pending: real publication, GitHub Pages, CI, promotion, and RPM/APK/Nix/Scoop receivers.
+Status: design in progress. Implemented: the APT publisher (`scripts/apt-publish.mjs`), its unit tests and the Docker e2e (`scripts/e2e-apt-docker.sh`), run in CI on Linux. Pending: real publication, GitHub Pages, promotion, and the RPM, APK, Nix and Scoop receivers.
 
 ## 1. Current problem
 
@@ -19,16 +19,15 @@ Consequences: partial failures can publish incomplete or unsigned repositories w
 
 ## 2. Declarative catalog contract
 
-One catalog entry per project, stored in this repository (`catalog/<project>.json`, format to be decided):
+Decided: one catalog file per project, `catalog/<project>.json` in this repository. JSON, no YAML. The catalog is data only: no secrets and no workflow logic.
+
+Fields (as implemented by `catalog/sql-pipe.json` and `scripts/validate-catalog.mjs`):
 
 - `repo`: source repository, e.g. `vmvarela/sql-pipe`.
-- `channels`: subset of `apt`, `rpm`, `apk`, `nix`, `scoop`, with per-channel target repository.
-- `architectures`: release architectures per channel (e.g. `amd64`, `arm64`; `x86_64`, `aarch64`).
-- `asset_pattern`: template with `{version}`, `{arch}`, `{os}` placeholders, e.g. `sql-pipe-{arch}-linux`.
-- `checksums`: name of the checksum asset (e.g. `sha256sums.txt`) that every asset must match.
-- `version_source`: how the version is read from the release tag (`vX.Y.Z` strip rule).
+- `checksums`: name of the checksum asset (`sha256sums.txt`) that every asset must match.
+- `channels`: per channel, the target repository and `assets` (architecture to file name template with `{version}`). Only `apt` is defined today.
 
-The catalog is data only. It contains no secrets and no workflow logic.
+Phase 1 covers `sql-pipe` only.
 
 ## 3. Receiver contract
 
@@ -36,12 +35,13 @@ Input: a catalog entry plus a release tag or version. The receiver never guesses
 
 Guarantees (all receivers):
 
-- Rejects the run if any required asset is missing or its SHA-256 does not match the checksum asset.
-- On failure, the last valid published state stays live. Nothing is partially promoted.
-- Keeps the current and previous version per app and architecture for APT, RPM and APK.
+- Rejects the run if any required asset is missing or its SHA-256 does not match the checksum asset. The APT publisher also checks the `.deb` control metadata before writing.
+- A failure before deployment keeps the previous published state; nothing is partially promoted.
+- An ambiguous failure after deployment may leave either the old or the new state live. Recovery reconciles the destination with the catalog; the next trigger or the recovery sync converges.
+- Keeps the current and previous version per app and architecture for APT, RPM and APK. Retention is per channel.
 - Idempotent: re-running the same tag produces the same published state.
 - No downgrade: a version lower than the currently published one is refused unless explicitly forced by a maintainer.
-- Serialized per destination with `concurrency: { group: <destination>, cancel-in-progress: false }` (queue, never cancel).
+- Concurrency per destination: GitHub's default concurrency keeps one running and one pending run; extra triggers replace the pending one. `queue: max` allows up to 100 pending runs, but without ordering guarantees. `cancel-in-progress: false` does not preserve all pending runs. Design rule: receivers must converge from the current catalog and published state, not from the sequence of triggers.
 
 Errors:
 
@@ -51,7 +51,7 @@ Errors:
 
 Secrets:
 
-- Cross-repo access uses the classic token `PACKAGE_DISTRIBUTION_TOKEN`, scoped per destination repository.
+- Cross-repo access uses the classic token `PACKAGE_DISTRIBUTION_TOKEN`: one token, stored in each producer repository. Classic PATs cannot be scoped to a single repository, so it is not per destination and its scope is broad.
 - GPG (APT, RPM) and APK signing keys live in the repository that publishes that channel, not here.
 - Missing signing key on a signed channel is a failure, not a warning.
 
@@ -63,22 +63,28 @@ Agreed by the user:
 - Periodic recovery sync: a scheduled run reconciles every destination against its catalog entries, so missed dispatches converge.
 - Manual: `workflow_dispatch` with tag/version input.
 
-Scheduled-workflow limits to account for:
+Scheduled-workflow limits:
 
 - GitHub scheduled runs can be delayed under load; they are not exact.
-- Scheduled workflows are disabled in public repositories after 60 days without repository activity. The sync must be re-enabled manually or kept alive by a documented activity source; decide which (see section 5).
+- Scheduled workflows are disabled in public repositories after 60 days without repository activity. Decided: accept a documented manual re-enable of the schedules; no artificial keep-alive.
 
-## 5. Open decisions and risks
+## 5. Decisions and open items
 
-Open decisions (not answered; need the user):
+Decided:
 
-1. Catalog location and format: single file or one file per project? JSON or YAML?
-2. Whether `damas` joins the first phase or waits for its receiver to be designed.
-3. Retention depth: "current + previous" for every channel, or per-channel different values?
-4. Keep-alive for the recovery sync after 60 days of inactivity: accept manual re-enable, or add a documented activity source?
-5. Whether Nix should consume the catalog at all, or stop updating `versions.json` from the receiver and rely solely on the producer.
-6. Who owns the APK and RPM signing keys after migration, and whether unsigned repositories are allowed for any channel.
-7. Scoop: create a receiver workflow in `scoop-bucket`, or keep manual manifest updates for now.
+1. Catalog location and format: one JSON file per project in `catalog/<project>.json` (section 2).
+2. Phase 1 is `sql-pipe` only, and APT comes first. RPM, APK, Nix and Scoop follow in later phases.
+3. Retention is per channel (APT keeps current and previous).
+4. Scheduled sync after 60 days of inactivity: manual re-enable, documented.
+5. Nix has a single writer for `versions.json`, not both producer and receiver.
+6. Signing: each destination has its own signing key. APT, RPM and APK are signed; `--allow-untrusted` is not used; unsigned repositories are not allowed.
+7. Scoop gets a receiver after APT, not before.
+
+Open (need the user):
+
+1. Whether `damas` joins the first phase or waits for its receiver to be designed.
+2. Which side is the single writer for Nix `versions.json`: the producer or the receiver. Section 1 shows the receiver today duplicates the producer.
+3. Whether Nix consumes the catalog at all.
 
 Risks:
 
@@ -91,8 +97,9 @@ Risks:
 
 Phase 1, one channel (APT, sql-pipe):
 
-- Real install on a clean Debian/Ubuntu container with `apt`; verify the installed version and signature check.
-- Repeat trigger with the same tag: no change in published index (idempotence).
+- Linux CI: syntax checks, catalog tests, publisher tests with required tools (no skips), and the Docker e2e (`scripts/e2e-apt-docker.sh`) with pinned release inputs (`scripts/fetch-e2e-debs.sh`).
+- Real install on a clean Debian/Ubuntu container with `apt`; verify the installed version and signature check (covered by the e2e).
+- Repeat trigger with the same tag: no change in published index (idempotence). Not yet tested.
 
 Phase 2, RPM, APK, Nix, Scoop:
 
@@ -101,9 +108,9 @@ Phase 2, RPM, APK, Nix, Scoop:
 Negative tests in every phase:
 
 - Failed download of one asset: receiver fails, previously published state still installable.
-- Wrong SHA-256 in checksum file: receiver rejects, nothing published.
-- Concurrency: two triggers for the same destination are serialized, none cancelled.
-- Replay: an older tag after a newer one is refused (no downgrade).
+- Wrong SHA-256 in checksum file: receiver rejects, nothing published (covered for APT by unit tests and the e2e).
+- Concurrency: two triggers for the same destination converge to the newest catalog state; none is assumed to be preserved by the queue.
+- Replay: an older tag after a newer one is refused (no downgrade; covered for APT by the e2e).
 - Recovery: suppress one dispatch, run the periodic sync, and confirm convergence.
 
 Each phase is merged only after its checks pass on the default branch of the destination repository.
