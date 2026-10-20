@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "project": "sql-pipe",
+  "repo": "vmvarela/sql-pipe",
+  "checksums": "sha256sums.txt",
+  "channels": {
+    "apt": {
+      "repo": "vmvarela/apt-packages",
+      "package": "sql-pipe",
+      "assets": {
+        "amd64": "sql-pipe_{version}_amd64.deb",
+        "arm64": "sql-pipe_{version}_arm64.deb",
+        "armhf": "sql-pipe_{version}_armhf.deb",
+        "i386": "sql-pipe_{version}_i386.deb"
+      }
+    }
+  }
+}
