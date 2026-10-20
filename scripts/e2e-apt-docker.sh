@@ -52,9 +52,7 @@ PUB="node scripts/apt-publish.mjs --catalog catalog/sql-pipe.json --state /work/
 publish() { $PUB --version "$1" --source "/work/data/$2" --out "/work/data/$3"; }
 promote() {
   rm -rf /srv/www && cp -R "/work/data/$1" /srv/www
-  mkdir -p /work/data/state && rm -rf /work/data/state/pool
-  cp -R "/work/data/$1/pool" /work/data/state/
-  cp "/work/data/$1.state.json" /work/data/state/state.json
+  rm -rf /work/data/state && cp -R "/work/data/$1.state" /work/data/state
 }
 
 echo "== publish 0.26.0 and install it through apt"
