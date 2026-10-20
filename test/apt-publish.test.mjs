@@ -1,4 +1,4 @@
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
@@ -30,7 +30,13 @@ function toolGate(tools) {
 }
 const fullGate = toolGate(["dpkg-deb", "gpg"]);
 const debGate = toolGate(["dpkg-deb"]);
-const scratch = () => mkdtempSync(join(process.env.TMPDIR || tmpdir(), "apt-publish-test-"));
+const scratchDirs = [];
+const scratch = () => {
+  const dir = mkdtempSync(join(process.env.TMPDIR || tmpdir(), "apt-publish-test-"));
+  scratchDirs.push(dir);
+  return dir;
+};
+after(() => { for (const dir of scratchDirs) rmSync(dir, { recursive: true, force: true }); });
 const name = (arch, version) => catalog.channels.apt.assets[arch].replace("{version}", version);
 
 function writeRelease(dir, version, contents = () => Buffer.from(`fake ${version}`)) {
