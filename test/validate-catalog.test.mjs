@@ -40,3 +40,41 @@ test("rejects wrong schema version and missing version placeholder", () => {
   assert.match(out, /schema_version: must be 1/);
   assert.match(out, /arm64: must contain \{version\}/);
 });
+
+const ghoten = JSON.parse(readFileSync(new URL("../catalog/ghoten.json", import.meta.url), "utf8"));
+const cloneGhoten = () => structuredClone(ghoten);
+
+test("ghoten catalog is valid with an explicit amd64 and arm64 subset", () => {
+  assert.deepEqual(validateCatalog(ghoten), []);
+  assert.deepEqual(ghoten.channels.apt.architectures, ["amd64", "arm64"]);
+});
+
+test("architecture subset must be non-empty, known and unique", () => {
+  const empty = cloneGhoten();
+  empty.channels.apt.architectures = [];
+  assert.match(validateCatalog(empty).join("\n"), /architectures: must be a non-empty array/);
+
+  const unknown = cloneGhoten();
+  unknown.channels.apt.architectures = ["amd64", "riscv64"];
+  assert.match(validateCatalog(unknown).join("\n"), /unknown architecture "riscv64"/);
+
+  const dup = cloneGhoten();
+  dup.channels.apt.architectures = ["amd64", "amd64"];
+  assert.match(validateCatalog(dup).join("\n"), /duplicate architecture/);
+});
+
+test("assets must match the architecture subset exactly", () => {
+  const extra = cloneGhoten();
+  extra.channels.apt.assets.armhf = "ghoten_{version}_armhf.deb";
+  assert.match(validateCatalog(extra).join("\n"), /assets: unknown architecture "armhf"/);
+
+  const missing = cloneGhoten();
+  delete missing.channels.apt.assets.arm64;
+  assert.match(validateCatalog(missing).join("\n"), /assets\.arm64: required string/);
+});
+
+test("sql-pipe stays strict: a subset is not implied", () => {
+  const c = clone();
+  c.channels.apt.architectures = ["amd64"];
+  assert.match(validateCatalog(c).join("\n"), /assets: unknown architecture "arm64"/);
+});

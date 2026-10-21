@@ -49,3 +49,7 @@ jobs:
         env:
           APT_E2E_DEBS: ${{ runner.temp }}/apt-test
         run: scripts/e2e-apt-docker.sh
+      - name: Run shadow e2e in debian:stable-slim
+        env:
+          APT_E2E_DEBS: ${{ runner.temp }}/apt-test
+        run: scripts/e2e-shadow-docker.sh

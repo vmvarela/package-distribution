@@ -8,9 +8,9 @@ const OWNER_REPO = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 
 const isPlainObject = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 
-function checkKeys(obj, allowed, path, errors) {
+function checkKeys(obj, allowed, path, errors, optional = []) {
   for (const key of Object.keys(obj)) {
-    if (!allowed.includes(key)) errors.push(`${path}: unknown key "${key}"`);
+    if (!allowed.includes(key) && !optional.includes(key)) errors.push(`${path}: unknown key "${key}"`);
   }
   for (const key of allowed) {
     if (!(key in obj)) errors.push(`${path}: missing key "${key}"`);
@@ -41,14 +41,29 @@ export function validateCatalog(catalog) {
 function validateApt(apt, errors) {
   const p = "catalog.channels.apt";
   if (!isPlainObject(apt)) return errors.push(`${p}: must be an object`);
-  checkKeys(apt, ["repo", "package", "assets"], p, errors);
+  // architectures is an optional explicit subset for this channel; absent means all four.
+  checkKeys(apt, ["repo", "package", "assets"], p, errors, ["architectures"]);
   if (typeof apt.repo !== "string" || !OWNER_REPO.test(apt.repo)) errors.push(`${p}.repo: must be owner/name`);
   if (typeof apt.package !== "string" || !SIMPLE_NAME.test(apt.package)) errors.push(`${p}.package: must be a simple name`);
   if (!isPlainObject(apt.assets)) return errors.push(`${p}.assets: must be an object`);
-  for (const arch of Object.keys(apt.assets)) {
-    if (!APT_ARCHES.includes(arch)) errors.push(`${p}.assets: unknown architecture "${arch}"`);
+  // Without an explicit subset every APT architecture is required.
+  let arches = APT_ARCHES;
+  if ("architectures" in apt) {
+    const subset = apt.architectures;
+    if (!Array.isArray(subset) || subset.length === 0) {
+      errors.push(`${p}.architectures: must be a non-empty array`);
+    } else {
+      for (const arch of subset) {
+        if (!APT_ARCHES.includes(arch)) errors.push(`${p}.architectures: unknown architecture "${arch}"`);
+      }
+      if (new Set(subset).size !== subset.length) errors.push(`${p}.architectures: duplicate architecture`);
+      if (subset.every((arch) => APT_ARCHES.includes(arch))) arches = subset;
+    }
   }
-  for (const arch of APT_ARCHES) {
+  for (const arch of Object.keys(apt.assets)) {
+    if (!arches.includes(arch)) errors.push(`${p}.assets: unknown architecture "${arch}"`);
+  }
+  for (const arch of arches) {
     const template = apt.assets[arch];
     if (typeof template !== "string") {
       errors.push(`${p}.assets.${arch}: required string`);
