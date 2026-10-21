@@ -99,12 +99,16 @@ case "$out" in *"missing in candidate"*) fail "candidate dropped a package: $out
 case "$out" in *"only in candidate: sql-pipe 0.27.0"*) ;; *) fail "sql-pipe 0.27.0 not reported: $out" ;; esac
 pass "sql-pipe 0.27.0 keeps ghoten 1.13.1; only the sql-pipe change differs"
 
-echo "== no-op: the same candidate again writes nothing"
-# state-sim already holds ghoten 1.13.1, so the same version is a no-op.
+echo "== no-op shadow: the same version builds a candidate site for comparison"
+# state-sim already holds ghoten 1.13.1, so no promotion is needed; shadow still materializes it.
+tree "$D/state-sim" > "$D/state-before-noop"
 node scripts/apt-publish.mjs --catalog catalog/ghoten.json --release-date 2026-10-20 --version 1.13.1 \
   --source "$D/src/ghoten/1.13.1" --out "$D/noop" --state "$D/state-sim" --shadow || fail "no-op shadow run failed"
-[ ! -e "$D/noop" ] && [ ! -e "$D/noop.state" ] || fail "no-op shadow run wrote a site or candidate state"
-pass "no-op shadow run wrote nothing"
+[ -f "$D/noop/.complete" ] && [ -f "$D/noop/dists/stable/Release" ] || fail "no-op shadow run did not build a candidate site"
+$APT_COMPARE --candidate "$D/noop" --live "$D/shadow-gh" || fail "identical no-op candidate did not match live"
+tree "$D/state-sim" > "$D/state-after-noop"
+diff -u "$D/state-before-noop" "$D/state-after-noop" || fail "no-op shadow run changed durable state"
+pass "same-version shadow candidate matches live; durable state untouched"
 
 echo "SHADOW E2E OK"
 CONTAINER

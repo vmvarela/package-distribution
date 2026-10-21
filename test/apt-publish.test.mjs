@@ -278,6 +278,14 @@ test(
       assert.equal((await publish(again)).action, "noop");
       assert.equal(existsSync(join(root, "o27b")), false, "noop must not regenerate or sign a site");
       assert.equal(existsSync(join(root, "o27b.state")), false, "noop must not write candidate state");
+
+      const before = execFileSync("find", [state, "-type", "f", "-exec", "shasum", "-a", "256", "{}", ";"]).toString();
+      const shadowOut = join(root, "shadow-noop");
+      assert.equal((await publish({ ...again, out: shadowOut, shadow: true })).action, "noop");
+      assert.match(readFileSync(join(shadowOut, ".complete"), "utf8"), /^shadow noop 0\.27\.0\n$/);
+      assert.ok(existsSync(join(shadowOut, "dists", "stable", "Release")), "shadow no-op must produce a comparable site");
+      assert.deepEqual(await compareSites(shadowOut, join(root, "o27")), []);
+      assert.equal(execFileSync("find", [state, "-type", "f", "-exec", "shasum", "-a", "256", "{}", ";"]).toString(), before, "shadow no-op must not alter durable state");
     } finally {
       process.env.GNUPGHOME = oldHome;
       rmSync(root, { recursive: true, force: true });

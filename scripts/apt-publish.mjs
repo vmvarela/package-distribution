@@ -260,8 +260,8 @@ export async function publish({ catalog, version, sourceDir, out, stateDir, rele
   }
 
   const action = decideAction(state, candidates);
-  // Nothing to publish: the site is not regenerated or re-signed.
-  if (action === "noop") return { action, version };
+  // A live no-op must not regenerate signatures; shadow still builds the site to compare it.
+  if (action === "noop" && !shadow) return { action, version };
 
   if (existsSync(out) && (await readdir(out)).length) throw new PublishError(`${out} is not empty; remove it before publishing`, EXIT.tool);
   if (existsSync(stateOut) && (await readdir(stateOut)).length) throw new PublishError(`${stateOut} is not empty; remove it before publishing`, EXIT.tool);
