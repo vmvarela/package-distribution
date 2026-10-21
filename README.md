@@ -21,7 +21,7 @@ GPG_KEY_ID=<key> node scripts/apt-publish.mjs --catalog catalog/sql-pipe.json --
 - `--source github` downloads the release assets from the GitHub API (tag `vX.Y.Z`). It refuses draft and prerelease releases. Unit tests cover these checks with a stubbed `fetch`; it has not run against the live API in this repository.
 - Exit codes: `1` tool or usage error, `2` version refused (older, or same version with different content), `3` verification failed.
 - Requires `dpkg-deb` (metadata) and `gpg` (signing). Missing tools fail; checks are never skipped.
-- Same version with identical content is a `noop`: it exits 0 and writes no site, signature or candidate state.
+- Same version with identical content is a `noop`: live mode exits 0 without writing. Shadow mode still builds a candidate site and candidate state for comparison, without changing the durable state root.
 - Duplicate architectures are always rejected. Without `--test-subset`, the set must be exactly the catalog architectures (four for sql-pipe, `amd64,arm64` for ghoten).
 
 Test-only exception: `--arches amd64 --test-subset` publishes a partial architecture set. Production runs must use all catalog architectures.
