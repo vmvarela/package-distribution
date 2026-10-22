@@ -208,7 +208,7 @@ async function withSnapshot(buf, fn) {
 
 // Pure-ish orchestration: every check runs before the first write to out.
 // Writes only to out and the candidate state <out>.state/; never to stateRoot. Shadow runs are the same, plus a guard.
-export async function publish({ catalog, version, sourceDir, out, stateDir, releaseDate, arches, gpgKeyId, testSubset = false, shadow = false, origin, label, description }) {
+export async function publish({ catalog, version, sourceDir, out, stateDir, releaseDate, arches, gpgKeyId, testSubset = false, shadow = false, force = false, origin, label, description }) {
   parseVersion(version);
   const errors = validateCatalog(catalog);
   if (errors.length) throw new PublishError(errors.join("; "), EXIT.tool);
@@ -264,8 +264,9 @@ export async function publish({ catalog, version, sourceDir, out, stateDir, rele
   }
 
   const action = decideAction(state, candidates);
-  // A live no-op must not regenerate signatures; shadow still builds the site to compare it.
-  if (action === "noop" && !shadow) return { action, version };
+  // A live no-op must not regenerate signatures; shadow still builds the site to compare it,
+  // and --force rebuilds a site that already matches the durable state.
+  if (action === "noop" && !shadow && !force) return { action, version };
 
   if (existsSync(out) && (await readdir(out)).length) throw new PublishError(`${out} is not empty; remove it before publishing`, EXIT.tool);
   if (existsSync(stateOut) && (await readdir(stateOut)).length) throw new PublishError(`${stateOut} is not empty; remove it before publishing`, EXIT.tool);
@@ -389,8 +390,8 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
     if (!key.startsWith("--")) throw new PublishError(`unexpected argument: ${key}`, EXIT.tool);
-    if (key === "--test-subset" || key === "--shadow") {
-      args[key === "--shadow" ? "shadow" : "testSubset"] = true;
+    if (key === "--test-subset" || key === "--shadow" || key === "--force") {
+      args[key.slice(2).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = true;
       continue;
     }
     if (argv[i + 1] === undefined) throw new PublishError(`missing value for ${key}`, EXIT.tool);
@@ -424,6 +425,7 @@ async function main(argv) {
       gpgKeyId: process.env.GPG_KEY_ID,
       testSubset: a.testSubset,
       shadow: a.shadow,
+      force: a.force,
       origin: a.origin,
       label: a.label,
       description: a.description,
@@ -434,7 +436,7 @@ async function main(argv) {
   }
 }
 
-// CLI: node scripts/apt-publish.mjs --catalog catalog/sql-pipe.json --version X.Y.Z --source <dir|github> --out <dir> --state <dir> --release-date YYYY-MM-DD [--origin <name>] [--label <name>] [--description <text>] [--shadow]
+// CLI: node scripts/apt-publish.mjs --catalog catalog/sql-pipe.json --version X.Y.Z --source <dir|github> --out <dir> --state <dir> --release-date YYYY-MM-DD [--origin <name>] [--label <name>] [--description <text>] [--shadow] [--force]
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.argv.slice(2)).catch((err) => {
     console.error(`apt-publish: ${err.message}`);
