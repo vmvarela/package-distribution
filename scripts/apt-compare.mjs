@@ -64,13 +64,16 @@ const readOptional = async (file) => (existsSync(file) ? readFile(file, "utf8") 
 // Hash fields are redundant with the Filename/Size/SHA256 tuple and differ by construction across sites.
 const HASH_FIELDS = new Set(["MD5sum", "SHA1", "SHA256", "SHA512"]);
 const TUPLE_FIELDS = new Set(["Filename", "Size", "SHA256"]);
+// Release is authenticated by its signature; a hash of Release inside Release is not a file APT verifies. The live
+// generator lists a stale `Release` entry, so skip the signature artifacts instead of comparing them as content.
+const RELEASE_ARTIFACTS = new Set(["Release", "InRelease", "Release.gpg"]);
 
 // Each site must serve exactly the files its own Release lists: existence, size and SHA-256.
 // Release paths are relative to dists/<suite>. Every index architecture needs both index files,
 // and a Packages.gz must decompress to the site's own Packages.
 async function verifyReleaseFiles(site, dir, release) {
   const diffs = [];
-  const listed = release.files.filter((f) => f.alg === "SHA256");
+  const listed = release.files.filter((f) => f.alg === "SHA256" && !RELEASE_ARTIFACTS.has(f.path));
   if (!listed.length) return [`${site}: Release lists no SHA256 files`];
   const paths = new Set(listed.map((f) => f.path));
   for (const arch of (release.header.Architectures ?? "").split(" ").filter(Boolean)) {
