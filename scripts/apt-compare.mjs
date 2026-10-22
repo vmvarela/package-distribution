@@ -29,19 +29,20 @@ export function parseStanzas(text) {
     });
 }
 
-// Release: header fields (Date excluded: it is not part of the content) and the hashed file list per algorithm.
+// Release: header fields (Date excluded: it is not part of the content) and the hashed file entries.
 export function parseRelease(text) {
   const header = {};
-  const files = new Set();
+  const files = [];
   let alg = null;
   for (const line of text.split("\n")) {
-    if (/^[A-Za-z0-9]+:\s*$/.test(line) && /^(MD5Sum|SHA256|SHA512):/.test(line)) {
-      alg = line.slice(0, -1);
+    const section = /^(MD5Sum|SHA256|SHA512):\s*$/.exec(line);
+    if (section) {
+      alg = section[1];
       continue;
     }
     if (line.startsWith(" ") && alg) {
       const [hash, size, path] = line.trim().split(/\s+/);
-      files.add(`${alg} ${path} ${size} ${hash}`);
+      files.push({ alg, hash, size, path });
       continue;
     }
     alg = null;
@@ -54,6 +55,25 @@ export function parseRelease(text) {
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 const readOptional = async (file) => (existsSync(file) ? readFile(file, "utf8") : null);
 
+// Each site must serve exactly the files its own Release lists: existence, size and SHA-256.
+// Release paths are relative to dists/<suite>.
+async function verifyReleaseFiles(site, dir, release) {
+  const diffs = [];
+  const listed = release.files.filter((f) => f.alg === "SHA256");
+  if (!listed.length) return [`${site}: Release lists no SHA256 files`];
+  for (const f of listed) {
+    const file = join(dir, "dists", SUITE, f.path);
+    if (!existsSync(file)) {
+      diffs.push(`${site}: ${f.path} listed in Release is missing`);
+      continue;
+    }
+    const buf = await readFile(file);
+    if (String(buf.length) !== f.size) diffs.push(`${site}: ${f.path} size ${buf.length} does not match Release ${f.size}`);
+    if (sha256(buf) !== f.hash) diffs.push(`${site}: ${f.path} does not match its SHA256 in Release`);
+  }
+  return diffs;
+}
+
 // Returns human-readable differences. Empty array means the candidate matches the live site.
 export async function compareSites(candidateDir, liveDir) {
   const diffs = [];
@@ -64,8 +84,8 @@ export async function compareSites(candidateDir, liveDir) {
   for (const key of new Set([...Object.keys(c.header), ...Object.keys(l.header)])) {
     if (c.header[key] !== l.header[key]) diffs.push(`Release ${key}: live "${l.header[key] ?? ""}" -> candidate "${c.header[key] ?? ""}"`);
   }
-  for (const f of l.files) if (!c.files.has(f)) diffs.push(`Release only in live: ${f}`);
-  for (const f of c.files) if (!l.files.has(f)) diffs.push(`Release only in candidate: ${f}`);
+  // The hashed file lists cannot match across sites (the live ones come from apt-ftparchive and gzip -k), so each site is checked against its own Release instead.
+  diffs.push(...(await verifyReleaseFiles("candidate", candidateDir, c)), ...(await verifyReleaseFiles("live", liveDir, l)));
 
   const arches = [...new Set([...(c.header.Architectures ?? "").split(" "), ...(l.header.Architectures ?? "").split(" ")])].filter(Boolean);
   for (const arch of arches) {

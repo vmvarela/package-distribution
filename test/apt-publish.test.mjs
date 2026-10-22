@@ -8,6 +8,7 @@ import { gunzipSync } from "node:zlib";
 import { parseStanzas, verifySignatures, compareSites } from "../scripts/apt-compare.mjs";
 import {
   EXIT,
+  buildRelease,
   compareVersions,
   decideAction,
   downloadRelease,
@@ -123,6 +124,19 @@ test("accepts only stable X.Y.Z versions", () => {
   for (const bad of ["0.27.0-rc1", "v0.27.0", "../0.27.0", "1.2", "01.2.3", "1.2.3+build", "9007199254740992.0.0", "1.99999999999999999999.0"]) {
     assert.throws(() => parseVersion(bad), /stable X\.Y\.Z/, bad);
   }
+});
+
+test("Release carries repository-level Origin, Label and Description", () => {
+  const files = [{ md5: "m", sha256: "s", sha512: "l", size: 1, path: "main/binary-amd64/Packages" }];
+  const args = { date: "Tue, 20 Oct 2026 00:00:00 GMT", arches: ["amd64"], files };
+  const release = buildRelease(args);
+  assert.match(release, /^Origin: vmvarela$/m);
+  assert.match(release, /^Label: vmvarela$/m);
+  assert.match(release, /^Description: vmvarela APT repository$/m);
+  const custom = buildRelease({ ...args, origin: "example", label: "example", description: "example APT repository" });
+  assert.match(custom, /^Origin: example$/m);
+  assert.match(custom, /^Label: example$/m);
+  assert.match(custom, /^Description: example APT repository$/m);
 });
 
 test("compares versions numerically", () => {
@@ -255,6 +269,9 @@ test(
       await publish(r1);
       const release26 = join(root, "o26", "dists", "stable", "Release");
       assert.match(readFileSync(release26, "utf8"), /^Date: Tue, 20 Oct 2026 00:00:00 GMT$/m);
+      assert.match(readFileSync(release26, "utf8"), /^Origin: vmvarela$/m);
+      assert.match(readFileSync(release26, "utf8"), /^Label: vmvarela$/m);
+      assert.match(readFileSync(release26, "utf8"), /^Description: vmvarela APT repository$/m);
       const packages = gunzipSync(readFileSync(join(root, "o26", "dists", "stable", "main", "binary-amd64", "Packages.gz"))).toString();
       assert.match(packages, /^Version: 0.26.0$/m);
       assert.match(packages, /^Filename: pool\/main\/s\/sql-pipe\/sql-pipe_0.26.0_amd64.deb$/m);
@@ -266,15 +283,19 @@ test(
       const state = join(root, "state");
       promote(root, "o26", state);
 
-      const r27 = base(root, { version: "0.27.0", sourceDir: realRelease(join(root, "r27"), "0.27.0"), out: join(root, "o27"), stateDir: state });
+      const r27 = base(root, { version: "0.27.0", sourceDir: realRelease(join(root, "r27"), "0.27.0"), out: join(root, "o27"), stateDir: state, origin: "example", label: "example", description: "example APT repository" });
       assert.equal((await publish(r27)).action, "promote");
+      const release27 = readFileSync(join(root, "o27", "dists", "stable", "Release"), "utf8");
+      assert.match(release27, /^Origin: example$/m);
+      assert.match(release27, /^Label: example$/m);
+      assert.match(release27, /^Description: example APT repository$/m);
       const pool = execFileSync("ls", [join(root, "o27", "pool", "main", "s", "sql-pipe")]).toString().trim().split("\n");
       assert.equal(pool.length, 8, "two versions for four architectures");
 
       await expectExit(publish({ ...base(root, { version: "0.25.0", sourceDir: realRelease(join(root, "r25"), "0.25.0"), out: join(root, "o25"), stateDir: state }) }), EXIT.version, /older/);
 
       promote(root, "o27", state);
-      const again = base(root, { version: "0.27.0", sourceDir: join(root, "r27"), out: join(root, "o27b"), stateDir: state });
+      const again = base(root, { version: "0.27.0", sourceDir: join(root, "r27"), out: join(root, "o27b"), stateDir: state, origin: "example", label: "example", description: "example APT repository" });
       assert.equal((await publish(again)).action, "noop");
       assert.equal(existsSync(join(root, "o27b")), false, "noop must not regenerate or sign a site");
       assert.equal(existsSync(join(root, "o27b.state")), false, "noop must not write candidate state");
@@ -391,13 +412,15 @@ test("multi-package: each publish keeps the other package from state", { skip: f
     promoteOut(gh.out, state);
 
     const sp27 = await publishPkg(root, catalog, "0.27.0");
-    assert.deepEqual(packagesOf(sp27.out, "arm64").sort(), ["ghoten 1.13.1", "sql-pipe 0.26.0", "sql-pipe 0.27.0"]);
+    assert.deepEqual(packagesOf(sp27.out, "arm64").sort(), ["ghoten 1.13.1", "sql-pipe 0.27.0"], "index lists only the newest sql-pipe");
     assert.ok(existsSync(join(sp27.out, "pool", "main", "g", "ghoten", "ghoten_1.13.1_arm64.deb")), "ghoten pool file carried");
+    assert.ok(existsSync(join(sp27.out, "pool", "main", "s", "sql-pipe", "sql-pipe_0.26.0_arm64.deb")), "retained sql-pipe pool file kept");
     promoteOut(sp27.out, state);
 
     const gh2 = await publishPkg(root, ghotenCatalog, "1.14.0");
-    assert.deepEqual(packagesOf(gh2.out, "amd64").sort(), ["ghoten 1.13.1", "ghoten 1.14.0", "sql-pipe 0.26.0", "sql-pipe 0.27.0"]);
-    assert.deepEqual(packagesOf(gh2.out, "i386").sort(), ["sql-pipe 0.26.0", "sql-pipe 0.27.0"]);
+    assert.deepEqual(packagesOf(gh2.out, "amd64").sort(), ["ghoten 1.14.0", "sql-pipe 0.27.0"]);
+    assert.deepEqual(packagesOf(gh2.out, "i386").sort(), ["sql-pipe 0.27.0"]);
+    assert.ok(existsSync(join(gh2.out, "pool", "main", "g", "ghoten", "ghoten_1.13.1_amd64.deb")), "retained ghoten pool file kept");
   });
 });
 
@@ -488,6 +511,28 @@ test("compare reports a missing package and a changed hash, and verifies the sig
     cpSync(live, forged, { recursive: true });
     writeFileSync(join(forged, "dists", "stable", "Release"), readFileSync(join(forged, "dists", "stable", "Release"), "utf8") + "Forged: yes\n");
     assert.ok((await verifySignatures(forged, join(live, "key.asc"))).length > 0);
+
+    // An unsigned index fails verification.
+    const unsigned = join(root, "unsigned");
+    cpSync(live, unsigned, { recursive: true });
+    rmSync(join(unsigned, "dists", "stable", "Release.gpg"));
+    rmSync(join(unsigned, "dists", "stable", "InRelease"));
+    assert.ok((await verifySignatures(unsigned, join(live, "key.asc"))).length > 0);
+
+    // A pool file altered after indexing fails the index check and its own Release check.
+    const badPool = join(root, "bad-pool");
+    cpSync(live, badPool, { recursive: true });
+    const deb = join(badPool, "pool", "main", "s", "sql-pipe", "sql-pipe_0.26.0_amd64.deb");
+    writeFileSync(deb, Buffer.concat([readFileSync(deb), Buffer.from("X")]));
+    const poolDiffs = await compareSites(badPool, live);
+    assert.ok(poolDiffs.some((d) => /file does not match its SHA256:/.test(d)), poolDiffs.join("\n"));
+
+    // A Release whose SHA-256 list disagrees with the file it lists fails the self-check.
+    const badRelease = join(root, "bad-release");
+    cpSync(live, badRelease, { recursive: true });
+    const releaseFile = join(badRelease, "dists", "stable", "Release");
+    writeFileSync(releaseFile, readFileSync(releaseFile, "utf8").replace(/^ [0-9a-f]{64} (\d+) (main\/binary-amd64\/Packages)$/m, ` ${"0".repeat(64)} $1 $2`));
+    assert.ok((await compareSites(badRelease, live)).some((d) => /does not match its SHA256 in Release/.test(d)));
   });
 });
 
