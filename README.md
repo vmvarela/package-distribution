@@ -8,13 +8,14 @@ Status: bootstrap. No channel is published yet; the APT publisher, its shadow mo
 
 ## APT receiver (local)
 
-`scripts/apt-publish.mjs` builds a signed APT site for one catalog entry from a verified stable release. It verifies every asset against the checksum file and the `.deb` control metadata before writing anything, keeps the current and previous version per package and architecture, and writes the site to `--out`, with a `.complete` marker last. Publication to the destination is outside this script.
+`scripts/apt-publish.mjs` builds a signed APT site for one catalog entry from a verified stable release. It verifies every asset against the checksum file and the `.deb` control metadata before writing anything, keeps the current and previous version per package and architecture in the pool, and writes the site to `--out`, with a `.complete` marker last. The index lists only the newest version of each package and architecture. Publication to the destination is outside this script.
 
 ```sh
 GPG_KEY_ID=<key> node scripts/apt-publish.mjs --catalog catalog/sql-pipe.json --version X.Y.Z \
   --source <dir> --out <new-dir> --state <state-root> --release-date YYYY-MM-DD [--shadow]
 ```
 
+- `--origin`, `--label` and `--description` set the Release repository fields; they default to `vmvarela`, `vmvarela` and `vmvarela APT repository`.
 - `--state` is the durable state root, read-only (layout in `docs/receivers.md`, section 3a). The run carries forward every other package in it, so a sql-pipe run keeps ghoten and vice versa.
 - The candidate state is written beside the site as `<out>.state/`. Promotion, outside this script, replaces the state root with it.
 - `--shadow` builds the same candidate and refuses an `--out` inside the state root. It never deploys and never writes the state root. Use it with `scripts/apt-compare.mjs`.
@@ -26,7 +27,7 @@ GPG_KEY_ID=<key> node scripts/apt-publish.mjs --catalog catalog/sql-pipe.json --
 
 Test-only exception: `--arches amd64 --test-subset` publishes a partial architecture set. Production runs must use all catalog architectures.
 
-`scripts/apt-compare.mjs --candidate <site> --live <site>` compares the per-architecture `Packages` entries (package, version, Filename, Size, SHA256), the `Release` headers (except `Date`) and hashed file list, and checks that every candidate pool file matches its index. It verifies `Release.gpg` and `InRelease` against the live `key.asc` in an isolated keyring. It prints up to 50 differences and exits `3` on any difference or signature failure.
+`scripts/apt-compare.mjs --candidate <site> --live <site>` compares the per-architecture `Packages` entries (package, version, all control fields, with missing and empty values treated as equal and hash fields excluded) and the `Release` headers (except `Date`). It does not compare the Release hashed file lists across sites: each site must list both `Packages` and `Packages.gz` for every architecture in its Release, serve every listed file with the listed size and SHA-256, and each `Packages.gz` must decompress to the site's own `Packages`. It checks candidate pool files against the index and retained files against the `<candidate>.state/` manifests, and verifies `Release.gpg` and `InRelease` against the live `key.asc` in an isolated keyring. It prints up to 50 differences and exits `3` on any difference or verification failure.
 
 Tests: `node --test test/apt-publish.test.mjs` skips the signing and metadata cases when `dpkg-deb` or `gpg` is missing. Set `APT_PUBLISH_TEST_REQUIRE_TOOLS=1` to fail instead; CI always sets it, and the macOS host fails without `dpkg-deb`.
 

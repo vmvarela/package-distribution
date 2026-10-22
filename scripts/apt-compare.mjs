@@ -2,11 +2,12 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile, rm, chmod } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
+import { gunzipSync } from "node:zlib";
 
 const run = promisify(execFile);
 const SUITE = "stable";
@@ -21,27 +22,34 @@ export function parseStanzas(text) {
     .filter(Boolean)
     .map((block) => {
       const fields = {};
+      let last = null;
       for (const line of block.split("\n")) {
         const m = /^([A-Za-z0-9-]+): ?(.*)$/.exec(line);
-        if (m) fields[m[1]] = m[2];
+        if (m) {
+          fields[m[1]] = m[2];
+          last = m[1];
+        } else if (last && /^[ \t]/.test(line)) {
+          fields[last] += `\n${line}`;
+        }
       }
       return fields;
     });
 }
 
-// Release: header fields (Date excluded: it is not part of the content) and the hashed file list per algorithm.
+// Release: header fields (Date excluded: it is not part of the content) and the hashed file entries.
 export function parseRelease(text) {
   const header = {};
-  const files = new Set();
+  const files = [];
   let alg = null;
   for (const line of text.split("\n")) {
-    if (/^[A-Za-z0-9]+:\s*$/.test(line) && /^(MD5Sum|SHA256|SHA512):/.test(line)) {
-      alg = line.slice(0, -1);
+    const section = /^(MD5Sum|SHA256|SHA512):\s*$/.exec(line);
+    if (section) {
+      alg = section[1];
       continue;
     }
     if (line.startsWith(" ") && alg) {
       const [hash, size, path] = line.trim().split(/\s+/);
-      files.add(`${alg} ${path} ${size} ${hash}`);
+      files.push({ alg, hash, size, path });
       continue;
     }
     alg = null;
@@ -53,6 +61,67 @@ export function parseRelease(text) {
 
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 const readOptional = async (file) => (existsSync(file) ? readFile(file, "utf8") : null);
+// Hash fields are redundant with the Filename/Size/SHA256 tuple and differ by construction across sites.
+const HASH_FIELDS = new Set(["MD5sum", "SHA1", "SHA256", "SHA512"]);
+const TUPLE_FIELDS = new Set(["Filename", "Size", "SHA256"]);
+
+// Each site must serve exactly the files its own Release lists: existence, size and SHA-256.
+// Release paths are relative to dists/<suite>. Every index architecture needs both index files,
+// and a Packages.gz must decompress to the site's own Packages.
+async function verifyReleaseFiles(site, dir, release) {
+  const diffs = [];
+  const listed = release.files.filter((f) => f.alg === "SHA256");
+  if (!listed.length) return [`${site}: Release lists no SHA256 files`];
+  const paths = new Set(listed.map((f) => f.path));
+  for (const arch of (release.header.Architectures ?? "").split(" ").filter(Boolean)) {
+    for (const path of [`main/binary-${arch}/Packages`, `main/binary-${arch}/Packages.gz`]) {
+      if (!paths.has(path)) diffs.push(`${site}: Release lacks ${path}`);
+    }
+  }
+  for (const f of listed) {
+    const file = join(dir, "dists", SUITE, f.path);
+    if (!existsSync(file)) {
+      diffs.push(`${site}: ${f.path} listed in Release is missing`);
+      continue;
+    }
+    const buf = await readFile(file);
+    if (String(buf.length) !== f.size) diffs.push(`${site}: ${f.path} size ${buf.length} does not match Release ${f.size}`);
+    if (sha256(buf) !== f.hash) diffs.push(`${site}: ${f.path} does not match its SHA256 in Release`);
+    if (f.path.endsWith("/Packages.gz")) {
+      const plain = join(dir, "dists", SUITE, f.path.slice(0, -3));
+      if (existsSync(plain) && gunzipSync(buf).compare(await readFile(plain)) !== 0) {
+        diffs.push(`${site}: ${f.path} does not match Packages`);
+      }
+    }
+  }
+  return diffs;
+}
+
+const poolPath = (pkg, file) => join("pool", "main", pkg.startsWith("lib") ? pkg.slice(0, 4) : pkg[0], pkg, file);
+
+// Retained versions are no longer indexed, so their manifest is the only record the candidate pool must satisfy.
+async function verifyRetained(candidateDir) {
+  const root = `${candidateDir}.state`;
+  if (!existsSync(root)) return [];
+  const diffs = [];
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const manifest = join(root, entry.name, "state.json");
+    if (!existsSync(manifest)) continue;
+    const state = JSON.parse(await readFile(manifest, "utf8"));
+    for (const entries of Object.values(state.architectures ?? {})) {
+      for (const e of entries) {
+        const file = join(candidateDir, poolPath(entry.name, e.file));
+        if (!existsSync(file)) {
+          diffs.push(`candidate: retained ${e.file} missing`);
+        } else if (sha256(await readFile(file)) !== e.sha256) {
+          diffs.push(`candidate: retained ${e.file} sha256 mismatch`);
+        }
+      }
+    }
+  }
+  return diffs;
+}
 
 // Returns human-readable differences. Empty array means the candidate matches the live site.
 export async function compareSites(candidateDir, liveDir) {
@@ -64,8 +133,8 @@ export async function compareSites(candidateDir, liveDir) {
   for (const key of new Set([...Object.keys(c.header), ...Object.keys(l.header)])) {
     if (c.header[key] !== l.header[key]) diffs.push(`Release ${key}: live "${l.header[key] ?? ""}" -> candidate "${c.header[key] ?? ""}"`);
   }
-  for (const f of l.files) if (!c.files.has(f)) diffs.push(`Release only in live: ${f}`);
-  for (const f of c.files) if (!l.files.has(f)) diffs.push(`Release only in candidate: ${f}`);
+  // The hashed file lists cannot match across sites (the live ones come from apt-ftparchive and gzip -k), so each site is checked against its own Release instead.
+  diffs.push(...(await verifyReleaseFiles("candidate", candidateDir, c)), ...(await verifyReleaseFiles("live", liveDir, l)), ...(await verifyRetained(candidateDir)));
 
   const arches = [...new Set([...(c.header.Architectures ?? "").split(" "), ...(l.header.Architectures ?? "").split(" ")])].filter(Boolean);
   for (const arch of arches) {
@@ -87,6 +156,12 @@ export async function compareSites(candidateDir, liveDir) {
       const q = cm.get(key);
       for (const field of ["Filename", "Size", "SHA256"]) {
         if (p[field] !== q[field]) diffs.push(`${arch}: ${key} ${field} changed: ${p[field]} -> ${q[field]}`);
+      }
+      // Every other control field is compared too; missing and empty values are equivalent.
+      for (const field of new Set([...Object.keys(p), ...Object.keys(q)])) {
+        if (TUPLE_FIELDS.has(field) || HASH_FIELDS.has(field)) continue;
+        const [lv, cv] = [p[field] ?? "", q[field] ?? ""];
+        if (lv !== cv) diffs.push(`${arch}: ${key} ${field} changed: "${lv}" -> "${cv}"`);
       }
     }
     for (const key of cm.keys()) if (!lm.has(key)) diffs.push(`${arch}: only in candidate: ${key}`);

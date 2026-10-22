@@ -73,10 +73,10 @@ Rules:
 
 - A publish run updates one package (the triggered one) and carries forward every other package in the state unchanged. Updating sql-pipe never drops ghoten, and the reverse.
 - Retention is per package and per architecture: exactly one current and one previous version. An architecture without a new candidate is carried forward unchanged, never rotated alone.
-- The site contains every package in the state. The index for each architecture lists every package that has entries for it.
+- The site contains every package in the state. The index for each architecture lists each package's newest version; retained previous versions stay in the pool but not in the index.
 - The publisher writes nothing to the state root. Its candidate state is `<out>.state/` with the same layout; promotion replaces the state root with it after the site is verified and deployed.
 
-Shadow mode (`--shadow`) builds the candidate from the state root and the triggered package, and refuses an output inside the state root. `scripts/apt-compare.mjs --candidate <site> --live <site>` then compares the candidate with the live site (per-architecture entries, `Release` headers and hashed files, and the candidate's signatures verified against the live `key.asc`). Any difference exits `3`. Shadow never deploys.
+Shadow mode (`--shadow`) builds the candidate from the state root and the triggered package, and refuses an output inside the state root. `scripts/apt-compare.mjs --candidate <site> --live <site>` then compares the candidate with the live site (per-architecture entries including all control fields, and `Release` headers except `Date`), verifies that each site lists both index files per architecture, serves every file its own Release lists with the listed size and SHA-256, and that each `Packages.gz` matches its `Packages`. It also checks indexed and retained candidate files against their manifests, and verifies the candidate's signatures against the live `key.asc`. Any difference exits `3`. Shadow never deploys.
 
 Not part of this change: migrating the existing `apt-packages` layout to this state, the shadow workflow in `apt-packages`, cutover, and the change of the dispatch flow. Those are separate PRs and need explicit approval.
 

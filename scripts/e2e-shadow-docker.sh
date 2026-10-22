@@ -95,9 +95,10 @@ node scripts/apt-publish.mjs --catalog catalog/sql-pipe.json --release-date 2026
 grep -q '^Package: ghoten$' "$D/shadow-sp/dists/stable/main/binary-amd64/Packages" || fail "sql-pipe update dropped ghoten"
 set +e; out=$($APT_COMPARE --candidate "$D/shadow-sp" --live "$D/shadow-gh" 2>&1); rc=$?; set -e
 [ "$rc" = 3 ] || fail "compare exit $rc, expected 3 for the sql-pipe update"
-case "$out" in *"missing in candidate"*) fail "candidate dropped a package: $out" ;; esac
+case "$out" in *"missing in candidate: ghoten"*) fail "candidate dropped ghoten: $out" ;; esac
+case "$out" in *"missing in candidate: sql-pipe 0.26.0"*) ;; *) fail "sql-pipe 0.26.0 should leave the index: $out" ;; esac
 case "$out" in *"only in candidate: sql-pipe 0.27.0"*) ;; *) fail "sql-pipe 0.27.0 not reported: $out" ;; esac
-pass "sql-pipe 0.27.0 keeps ghoten 1.13.1; only the sql-pipe change differs"
+pass "sql-pipe 0.27.0 replaces 0.26.0 in the index; ghoten 1.13.1 is kept"
 
 echo "== no-op shadow: the same version builds a candidate site for comparison"
 # state-sim already holds ghoten 1.13.1, so no promotion is needed; shadow still materializes it.

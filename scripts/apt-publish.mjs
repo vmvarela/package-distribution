@@ -15,6 +15,9 @@ const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const RETAIN = 2;
 const SUITE = "stable";
+const ORIGIN = "vmvarela";
+const LABEL = "vmvarela";
+const DESCRIPTION = "vmvarela APT repository";
 const ARCHES = ["amd64", "arm64", "armhf", "i386"];
 const NAME = /^[A-Za-z0-9._-]+$/;
 export const EXIT = { tool: 1, version: 2, verify: 3 };
@@ -106,10 +109,11 @@ export function packageStanza(control, { filename, size, md5, sha256: hash }) {
   return `${control.trimEnd()}\nFilename: ${filename}\nSize: ${size}\nMD5sum: ${md5}\nSHA256: ${hash}\n`;
 }
 
-export function buildRelease({ origin, date, arches, files }) {
+export function buildRelease({ origin = ORIGIN, label = LABEL, description = DESCRIPTION, date, arches, files }) {
   const lines = [
     `Origin: ${origin}`,
-    `Label: ${origin}`,
+    `Label: ${label}`,
+    `Description: ${description}`,
     `Suite: ${SUITE}`,
     `Codename: ${SUITE}`,
     `Date: ${date}`,
@@ -204,7 +208,7 @@ async function withSnapshot(buf, fn) {
 
 // Pure-ish orchestration: every check runs before the first write to out.
 // Writes only to out and the candidate state <out>.state/; never to stateRoot. Shadow runs are the same, plus a guard.
-export async function publish({ catalog, version, sourceDir, out, stateDir, releaseDate, arches, gpgKeyId, testSubset = false, shadow = false }) {
+export async function publish({ catalog, version, sourceDir, out, stateDir, releaseDate, arches, gpgKeyId, testSubset = false, shadow = false, origin, label, description }) {
   parseVersion(version);
   const errors = validateCatalog(catalog);
   if (errors.length) throw new PublishError(errors.join("; "), EXIT.tool);
@@ -283,8 +287,9 @@ export async function publish({ catalog, version, sourceDir, out, stateDir, rele
     for (const [arch, entries] of Object.entries(next)) {
       for (const entry of entries) {
         let buf;
-        if (pkg === apt.package && entry.version === version) {
-          buf = candidates.get(arch).buf;
+        const candidate = pkg === apt.package ? candidates.get(arch) : undefined;
+        if (candidate && entry.version === version) {
+          buf = candidate.buf;
         } else {
           try {
             buf = await readFile(join(pkgStateDir(stateDir, pkg), "pool", entry.file));
@@ -306,11 +311,12 @@ export async function publish({ catalog, version, sourceDir, out, stateDir, rele
   for (const arch of siteArches) {
     const stanzas = [];
     for (const [pkg, next] of [...plan].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
-      for (const entry of next[arch] ?? []) {
-        const file = join(out, poolDir(pkg), entry.file);
-        const control = await dpkg(["-f", file]);
-        stanzas.push(packageStanza(control, { filename: join(poolDir(pkg), entry.file), ...digests(await readFile(file)) }));
-      }
+      // The index carries only the newest entry per package and architecture; retention keeps older files in the pool.
+      const [entry] = next[arch] ?? [];
+      if (!entry) continue;
+      const file = join(out, poolDir(pkg), entry.file);
+      const control = await dpkg(["-f", file]);
+      stanzas.push(packageStanza(control, { filename: join(poolDir(pkg), entry.file), ...digests(await readFile(file)) }));
     }
     const packages = Buffer.from(stanzas.join("\n"));
     const dir = join(out, "dists", SUITE, "main", `binary-${arch}`);
@@ -323,7 +329,9 @@ export async function publish({ catalog, version, sourceDir, out, stateDir, rele
 
   const dists = join(out, "dists", SUITE);
   const release = buildRelease({
-    origin: apt.package,
+    origin,
+    label,
+    description,
     date: new Date(`${releaseDate}T00:00:00Z`).toUTCString(),
     arches: siteArches,
     files: indexFiles,
@@ -416,6 +424,9 @@ async function main(argv) {
       gpgKeyId: process.env.GPG_KEY_ID,
       testSubset: a.testSubset,
       shadow: a.shadow,
+      origin: a.origin,
+      label: a.label,
+      description: a.description,
     });
     console.log(`apt-publish: ${a.shadow ? "shadow " : ""}${result.action} ${result.version}`);
   } finally {
@@ -423,7 +434,7 @@ async function main(argv) {
   }
 }
 
-// CLI: node scripts/apt-publish.mjs --catalog catalog/sql-pipe.json --version X.Y.Z --source <dir|github> --out <dir> --state <dir> --release-date YYYY-MM-DD [--shadow]
+// CLI: node scripts/apt-publish.mjs --catalog catalog/sql-pipe.json --version X.Y.Z --source <dir|github> --out <dir> --state <dir> --release-date YYYY-MM-DD [--origin <name>] [--label <name>] [--description <text>] [--shadow]
 if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.argv.slice(2)).catch((err) => {
     console.error(`apt-publish: ${err.message}`);
