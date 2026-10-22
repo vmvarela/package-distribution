@@ -287,8 +287,9 @@ export async function publish({ catalog, version, sourceDir, out, stateDir, rele
     for (const [arch, entries] of Object.entries(next)) {
       for (const entry of entries) {
         let buf;
-        if (pkg === apt.package && entry.version === version) {
-          buf = candidates.get(arch).buf;
+        const candidate = pkg === apt.package ? candidates.get(arch) : undefined;
+        if (candidate && entry.version === version) {
+          buf = candidate.buf;
         } else {
           try {
             buf = await readFile(join(pkgStateDir(stateDir, pkg), "pool", entry.file));

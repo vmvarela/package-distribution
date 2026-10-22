@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { gunzipSync } from "node:zlib";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { parseStanzas, verifySignatures, compareSites } from "../scripts/apt-compare.mjs";
 import {
   EXIT,
@@ -108,6 +108,13 @@ const base = (root, extra = {}) => ({
 function promote(root, site, state) {
   rmSync(state, { recursive: true, force: true });
   cpSync(join(root, `${site}.state`), state, { recursive: true });
+}
+
+// Updates the SHA256 line of one Release entry after rewriting the file it describes.
+function rewriteReleaseEntry(site, path, buf) {
+  const file = join(site, "dists", "stable", "Release");
+  const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  writeFileSync(file, readFileSync(file, "utf8").replace(new RegExp(`^ [0-9a-f]{64} \\d+ ${escaped}$`, "m"), ` ${sha256(buf)} ${buf.length} ${path}`));
 }
 
 async function expectExit(promise, code, pattern) {
@@ -282,6 +289,11 @@ test(
       // Promote the first run the way the publication step would: site, pool and state.
       const state = join(root, "state");
       promote(root, "o26", state);
+
+      // A same-version shadow subset keeps architectures that have no candidate instead of crashing.
+      const partial = await publish(base(root, { version: "0.26.0", sourceDir: join(root, "r26"), out: join(root, "o26-partial"), stateDir: state, arches: "amd64", testSubset: true, shadow: true }));
+      assert.equal(partial.action, "noop");
+      assert.ok(existsSync(join(root, "o26-partial", "pool", "main", "s", "sql-pipe", "sql-pipe_0.26.0_arm64.deb")), "carried architecture is preserved");
 
       const r27 = base(root, { version: "0.27.0", sourceDir: realRelease(join(root, "r27"), "0.27.0"), out: join(root, "o27"), stateDir: state, origin: "example", label: "example", description: "example APT repository" });
       assert.equal((await publish(r27)).action, "promote");
@@ -519,7 +531,7 @@ test("compare reports a missing package and a changed hash, and verifies the sig
     rmSync(join(unsigned, "dists", "stable", "InRelease"));
     assert.ok((await verifySignatures(unsigned, join(live, "key.asc"))).length > 0);
 
-    // A pool file altered after indexing fails the index check and its own Release check.
+    // A pool file altered after indexing fails the candidate index check.
     const badPool = join(root, "bad-pool");
     cpSync(live, badPool, { recursive: true });
     const deb = join(badPool, "pool", "main", "s", "sql-pipe", "sql-pipe_0.26.0_amd64.deb");
@@ -533,6 +545,46 @@ test("compare reports a missing package and a changed hash, and verifies the sig
     const releaseFile = join(badRelease, "dists", "stable", "Release");
     writeFileSync(releaseFile, readFileSync(releaseFile, "utf8").replace(/^ [0-9a-f]{64} (\d+) (main\/binary-amd64\/Packages)$/m, ` ${"0".repeat(64)} $1 $2`));
     assert.ok((await compareSites(badRelease, live)).some((d) => /does not match its SHA256 in Release/.test(d)));
+
+    // A Release that omits an expected index file is a difference even when every listed file is valid.
+    const noIndex = join(root, "no-index");
+    cpSync(live, noIndex, { recursive: true });
+    const noIndexRelease = join(noIndex, "dists", "stable", "Release");
+    writeFileSync(noIndexRelease, readFileSync(noIndexRelease, "utf8").replace(/^ [0-9a-f]{64} \d+ main\/binary-amd64\/Packages\.gz$/m, ""));
+    assert.ok((await compareSites(noIndex, live)).includes("candidate: Release lacks main/binary-amd64/Packages.gz"));
+
+    // A Packages.gz whose bytes differ from Packages is a difference even when its own hash is correct.
+    const gzPath = join("main", "binary-amd64", "Packages.gz");
+    const badGzip = join(root, "bad-gzip");
+    cpSync(live, badGzip, { recursive: true });
+    const plainPackages = readFileSync(join(badGzip, "dists", "stable", "main", "binary-amd64", "Packages"));
+    const badGz = gzipSync(Buffer.concat([plainPackages, Buffer.from("Extra: field\n")]));
+    writeFileSync(join(badGzip, "dists", "stable", gzPath), badGz);
+    rewriteReleaseEntry(badGzip, gzPath, badGz);
+    assert.ok((await compareSites(badGzip, live)).includes("candidate: main/binary-amd64/Packages.gz does not match Packages"));
+
+    // Different gzip bytes (compression level) with identical content are not a difference.
+    const regz = join(root, "regz");
+    cpSync(live, regz, { recursive: true });
+    const regzBytes = gzipSync(plainPackages, { level: 1 });
+    assert.notEqual(regzBytes.compare(readFileSync(join(regz, "dists", "stable", gzPath))), 0, "the test needs different gzip bytes");
+    writeFileSync(join(regz, "dists", "stable", gzPath), regzBytes);
+    rewriteReleaseEntry(regz, gzPath, regzBytes);
+    assert.deepEqual(await compareSites(regz, live), []);
+
+    // A changed control field is reported even when the Filename, Size and SHA256 tuple is unchanged.
+    const fieldCopy = join(root, "field");
+    cpSync(live, fieldCopy, { recursive: true });
+    const fieldPackages = join(fieldCopy, "dists", "stable", "main", "binary-amd64", "Packages");
+    writeFileSync(fieldPackages, readFileSync(fieldPackages, "utf8").replace(/^Architecture: amd64$/m, "Architecture: arm64"));
+    assert.ok((await compareSites(fieldCopy, live)).includes('amd64: sql-pipe 0.26.0 Architecture changed: "amd64" -> "arm64"'));
+
+    // A retained .deb listed in the candidate state but absent from the candidate pool is a difference.
+    const lost = join(root, "lost-retained");
+    cpSync(live, lost, { recursive: true });
+    cpSync(`${live}.state`, `${lost}.state`, { recursive: true });
+    rmSync(join(lost, "pool", "main", "s", "sql-pipe", "sql-pipe_0.26.0_amd64.deb"));
+    assert.ok((await compareSites(lost, live)).includes("candidate: retained sql-pipe_0.26.0_amd64.deb missing"));
   });
 });
 
