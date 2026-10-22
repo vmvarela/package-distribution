@@ -546,6 +546,14 @@ test("compare reports a missing package and a changed hash, and verifies the sig
     writeFileSync(releaseFile, readFileSync(releaseFile, "utf8").replace(/^ [0-9a-f]{64} (\d+) (main\/binary-amd64\/Packages)$/m, ` ${"0".repeat(64)} $1 $2`));
     assert.ok((await compareSites(badRelease, live)).some((d) => /does not match its SHA256 in Release/.test(d)));
 
+    // A Release that lists itself with stale values is not a content difference: the signature authenticates it.
+    const selfListed = join(root, "self-listed");
+    cpSync(live, selfListed, { recursive: true });
+    const selfRelease = join(selfListed, "dists", "stable", "Release");
+    writeFileSync(selfRelease, readFileSync(selfRelease, "utf8").replace(/^(SHA256:\n)/m, `$1 ${"a".repeat(64)}              194 Release\n`));
+    const selfDiffs = await compareSites(selfListed, live);
+    assert.ok(!selfDiffs.some((d) => /: Release (size|does not match)/.test(d)), selfDiffs.join("\n"));
+
     // A Release that omits an expected index file is a difference even when every listed file is valid.
     const noIndex = join(root, "no-index");
     cpSync(live, noIndex, { recursive: true });
