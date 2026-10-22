@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "project": "damas",
+  "repo": "vmvarela/damas",
+  "checksums": "sha256sums.txt",
+  "channels": {
+    "apt": {
+      "repo": "vmvarela/apt-packages",
+      "package": "damas",
+      "architectures": ["amd64", "arm64", "armhf", "i386"],
+      "assets": {
+        "amd64": "damas_{version}_amd64.deb",
+        "arm64": "damas_{version}_arm64.deb",
+        "armhf": "damas_{version}_armhf.deb",
+        "i386": "damas_{version}_i386.deb"
+      }
+    }
+  }
+}
