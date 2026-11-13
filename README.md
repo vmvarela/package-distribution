@@ -68,7 +68,21 @@ APK_SIGNING_KEY="$(cat vmvarela.rsa)" node scripts/apk-publish.mjs --catalog cat
 - Tests: `node --test test/apk-publish.test.mjs` skips the publish cases unless those tools are installed and `scripts/fetch-e2e-apks.sh` has placed the pinned fixtures in `$APK_E2E_APKS`. Set `APK_PUBLISH_TEST_REQUIRE_TOOLS=1` to fail instead.
 - `scripts/e2e-apk-docker.sh` repeats the scenario in `alpine:latest`: publish sql-pipe, publish damas over the resulting state, `apk add` both without `--allow-untrusted`, and the refusals for an unsigned index and a missing key.
 
-CI (`.github/workflows/ci.yml`): syntax checks, catalog tests and validation, publisher tests with `APT_PUBLISH_TEST_REQUIRE_TOOLS=1`, and the APT Docker e2e on one job, plus the RPM publisher tests and Docker e2e on another, and the APK publisher tests and Docker e2e in an Alpine job. All have read-only permissions and no secrets.
+## Nix receiver (local)
+
+`scripts/nix-publish.mjs` writes `pkgs/<package>/versions.json` for the flake in `vmvarela/nix-packages`. It is the only writer of that file; the producers dispatch a release instead of pushing it.
+
+```sh
+node scripts/nix-publish.mjs --catalog catalog/sql-pipe.json --version X.Y.Z \
+  --source <dir|github> --out <dir> --state <dir> [--systems a,b] [--test-subset] [--force]
+```
+
+- The output is `<dir>/pkgs/<package>/versions.json` plus `<dir>/.complete`, so the destination workflow copies the file into its checkout and commits it. There is no site, no metadata tooling and no signing: `fetchurl` checks the recorded `sha256`.
+- Every asset is downloaded and hashed against the release `sha256sums.txt` first. Systems a release does not ship keep their previous version; an older release is refused (exit `2`) unless `--force` is given, and the same tag again is a `noop` that writes nothing.
+- The durable state is `state/<package>/state.json`: version, and per-system `sha256` and `url`. No pool and no retention, because one JSON file cannot reference two versions.
+- Tests: `node --test test/nix-publish.test.mjs` runs everywhere (synthetic fixtures, standard library only). One real run against a published release: `--source github`.
+
+CI (`.github/workflows/ci.yml`): syntax checks, catalog tests and validation, publisher tests with `APT_PUBLISH_TEST_REQUIRE_TOOLS=1`, and the APT Docker e2e on one job, plus the RPM publisher tests and Docker e2e on another, the APK publisher tests and Docker e2e in an Alpine job, and the Nix receiver tests in the validate job. All have read-only permissions and no secrets.
 
 Remaining:
 

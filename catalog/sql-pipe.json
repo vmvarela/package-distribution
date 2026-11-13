@@ -29,6 +29,16 @@
         "x86_64": "sql-pipe_{version}_x86_64.apk",
         "aarch64": "sql-pipe_{version}_aarch64.apk"
       }
+    },
+    "nix": {
+      "repo": "vmvarela/nix-packages",
+      "package": "sql-pipe",
+      "assets": {
+        "x86_64-linux": "sql-pipe-x86_64-linux",
+        "aarch64-linux": "sql-pipe-aarch64-linux",
+        "x86_64-darwin": "sql-pipe-x86_64-macos",
+        "aarch64-darwin": "sql-pipe-aarch64-macos"
+      }
     }
   }
 }

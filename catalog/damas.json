@@ -7,7 +7,12 @@
     "apt": {
       "repo": "vmvarela/apt-packages",
       "package": "damas",
-      "architectures": ["amd64", "arm64", "armhf", "i386"],
+      "architectures": [
+        "amd64",
+        "arm64",
+        "armhf",
+        "i386"
+      ],
       "assets": {
         "amd64": "damas_{version}_amd64.deb",
         "arm64": "damas_{version}_arm64.deb",
@@ -29,6 +34,16 @@
       "assets": {
         "x86_64": "damas_{version}_x86_64.apk",
         "aarch64": "damas_{version}_aarch64.apk"
+      }
+    },
+    "nix": {
+      "repo": "vmvarela/nix-packages",
+      "package": "damas",
+      "assets": {
+        "x86_64-linux": "damas-x86_64-linux",
+        "aarch64-linux": "damas-aarch64-linux",
+        "x86_64-darwin": "damas-x86_64-macos",
+        "aarch64-darwin": "damas-aarch64-macos"
       }
     }
   }

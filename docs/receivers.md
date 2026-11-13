@@ -1,6 +1,6 @@
 # Shared package receivers: design
 
-Status: design in progress. Implemented: the APT publisher (`scripts/apt-publish.mjs`), its unit tests and the Docker e2e (`scripts/e2e-apt-docker.sh`), the RPM publisher (`scripts/rpm-publish.mjs`) with its tests and Docker e2e (`scripts/e2e-rpm-docker.sh`), and the APK publisher (`scripts/apk-publish.mjs`) with its tests and Docker e2e (`scripts/e2e-apk-docker.sh`), all run in CI on Linux. APT and RPM are live. Pending: real publication of APK, and the Nix and Scoop receivers.
+Status: design in progress. Implemented: the APT publisher (`scripts/apt-publish.mjs`), its unit tests and the Docker e2e (`scripts/e2e-apt-docker.sh`), the RPM publisher (`scripts/rpm-publish.mjs`) with its tests and Docker e2e (`scripts/e2e-rpm-docker.sh`), the APK publisher (`scripts/apk-publish.mjs`) with its tests and Docker e2e (`scripts/e2e-apk-docker.sh`), and the Nix receiver (`scripts/nix-publish.mjs`) with unit tests, all run in CI on Linux. APT, RPM and APK are live. Pending: the Nix cutover, and the Scoop receiver.
 
 ## 1. Current problem
 
@@ -11,7 +11,7 @@ Facts checked against the default branches of each repository on the day of writ
 | `vmvarela/apt-packages` (`update.yml`) | `update-sql-pipe`, `update-ghoten` | Rebuilds the whole index from scratch for sql-pipe and ghoten. Target mapping sets `ghoten`, but the guard at line ~137 compares against `ghoton`, so the "Ghoten-triggered rebuild requires both DEB packages" check never fires. |
 | `vmvarela/rpm-packages` (`update.yml`) | `update-sql-pipe` only | Asset downloads use `curl ... 2>/dev/null` inside `if`, so a failed download is skipped silently. GPG signing is optional (warning if key missing). Generated `.repo` sets `gpgcheck=0` and `repo_gpgcheck=1`. |
 | `vmvarela/apk-packages` (`update.yml`) | `update-sql-pipe` only | Downloads use `curl ... 2>/dev/null` inside `if`; failures are skipped silently. Index signing is optional. Index generation uses `--allow-untrusted`. |
-| `vmvarela/nix-packages` (`update.yml`) | `update-sql-pipe` only | Rewrites `versions.json` from the release `sha256sums.txt`. The producer already performs the same update, so the work is duplicated. |
+| `vmvarela/nix-packages` (`update.yml`) | `update-sql-pipe` only | Rewrites `versions.json` from the release `sha256sums.txt`, while each producer's own release workflow pushes the same file. Two writers, one file. |
 | `vmvarela/scoop-bucket` | none | Holds `bucket/damas.json` and `bucket/sql-pipe.json`. No receiver workflow. |
 | `vmvarela/damas` | dispatches `update-damas` | No receiver exists for that event. Not re-verified in this pass. |
 
@@ -105,6 +105,18 @@ Rules specific to APK:
 - The public key is derived from the private one with `openssl rsa -pubout` and published as `vmvarela.rsa.pub` at the site root; clients copy it into `/etc/apk/keys/`. A missing key is a failure, never an unsigned fallback.
 - The `.complete` marker, state validation, output-inside-state guard and `--force` behave exactly as in RPM.
 
+## 3d. Nix durable state
+
+Nix is the only channel without a site: the destination is the flake repository itself, and clients read `pkgs/<package>/versions.json` from `main`.
+
+Rules specific to Nix:
+
+- The receiver is the single writer of `versions.json`; the producer stops writing it in the same change. Two writers on one file was the duplication this platform exists to remove.
+- The state in `state/<package>/state.json` keeps the current version and per-system `sha256` and `url`. There is no `pool/` and no two-version retention: a `versions.json` can point at only one version per system.
+- A release that ships only some systems keeps the other systems on their previous version instead of deleting them, so `nix run` keeps working on the missing platforms.
+- Going back to an older release is refused (exit 2) unless `--force` is passed; re-running the same tag is a `noop` and writes nothing.
+- Nothing is signed and nothing is copied: `fetchurl` downloads the release asset and checks the `sha256` recorded here. Every asset is still downloaded and hashed against the release `sha256sums.txt` before the file is written.
+
 ## 4. Triggering
 
 Agreed by the user:
@@ -133,7 +145,7 @@ Decided:
 Open (need the user):
 
 1. Whether `damas` joins the first phase or waits for its receiver to be designed.
-2. Which side is the single writer for Nix `versions.json`: the producer or the receiver. Section 1 shows the receiver today duplicates the producer.
+2. ~~Which side is the single writer for Nix `versions.json`: the producer or the receiver.~~ Decided: the receiver, and the producer's writer is removed in the same change (step 9 of issue #5).
 3. Whether Nix consumes the catalog at all.
 
 Risks:
@@ -156,6 +168,7 @@ Phase 2, RPM, APK, Nix, Scoop:
 
 - RPM: `createrepo_c` metadata, package and metadata signatures, and a real `dnf install` with `gpgcheck=1` and `repo_gpgcheck=1` (`scripts/e2e-rpm-docker.sh`).
 - APK: signed index and a real `apk add` on Alpine without `--allow-untrusted`, plus a refusal when the index is unsigned or the key is not installed (`scripts/e2e-apk-docker.sh`).
+- Nix: `versions.json` shape, carry-forward of missing systems, noop, `--force` and downgrade refusal with synthetic fixtures (`test/nix-publish.test.mjs`), plus one real `--source github` run against a published release.
 - `nix profile install` from the flake, `scoop install` on Windows runner, and `brew` where applicable.
 
 Negative tests in every phase:
