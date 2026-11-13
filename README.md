@@ -82,6 +82,21 @@ node scripts/nix-publish.mjs --catalog catalog/sql-pipe.json --version X.Y.Z \
 - The durable state is `state/<package>/state.json`: version, and per-system `sha256` and `url`. No pool and no retention, because one JSON file cannot reference two versions.
 - Tests: `node --test test/nix-publish.test.mjs` runs everywhere (synthetic fixtures, standard library only). One real run against a published release: `--source github`.
 
+## Scoop receiver (local)
+
+`scripts/scoop-publish.mjs` regenerates `bucket/<package>.json` in `vmvarela/scoop-bucket` from a verified stable release, using the same state shape as the Nix receiver (`channels.scoop`, `state/<package>/`).
+
+```sh
+node scripts/scoop-publish.mjs --catalog catalog/sql-pipe.json --version X.Y.Z \
+  --source <dir> --out <new-dir> --state <state-root> [--arches 64bit,32bit,arm64] [--force]
+```
+
+- The manifest keeps the shape the producers wrote: same key order, four-space indent, `#/<package>.exe` URL fragment, `checkver: github` and the `autoupdate` block. That is what makes the writer swap invisible to `scoop install`.
+- `description` and `license` come from the catalog channel, so package metadata stays in one file.
+- Windows assets carry no version in the name, so each architecture's URL uses the version recorded for that architecture: a release that omits one architecture keeps the previous version and URL for it.
+- No pool and no signing: a bucket trusts its repository, and the manifest hash protects the download. `--force` rewrites the manifest of a noop version.
+- Tests: `node --test test/scoop-publish.test.mjs` runs without external tools.
+
 CI (`.github/workflows/ci.yml`): syntax checks, catalog tests and validation, publisher tests with `APT_PUBLISH_TEST_REQUIRE_TOOLS=1`, and the APT Docker e2e on one job, plus the RPM publisher tests and Docker e2e on another, the APK publisher tests and Docker e2e in an Alpine job, and the Nix receiver tests in the validate job. All have read-only permissions and no secrets.
 
 Remaining:

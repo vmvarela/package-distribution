@@ -45,6 +45,17 @@
         "x86_64-darwin": "damas-x86_64-macos",
         "aarch64-darwin": "damas-aarch64-macos"
       }
+    },
+    "scoop": {
+      "repo": "vmvarela/scoop-bucket",
+      "package": "damas",
+      "description": "Checkers game: CLI, TUI and embedded web server in one binary",
+      "license": "MIT",
+      "assets": {
+        "64bit": "damas-x86_64-windows.exe",
+        "32bit": "damas-x86-windows.exe",
+        "arm64": "damas-aarch64-windows.exe"
+      }
     }
   }
 }

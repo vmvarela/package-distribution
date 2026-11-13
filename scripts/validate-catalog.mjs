@@ -7,8 +7,10 @@ export const RPM_ARCHES = ["x86_64", "aarch64"];
 export const APK_ARCHES = ["x86_64", "aarch64"];
 // Nix systems are not architectures: the receiver writes one versions.json per package, keyed by these.
 export const NIX_SYSTEMS = ["x86_64-linux", "aarch64-linux", "x86_64-darwin", "aarch64-darwin"];
+// Scoop architecture names come from the manifest format, not from the release naming.
+export const SCOOP_ARCHES = ["64bit", "32bit", "arm64"];
 // Each channel validates against its own architecture vocabulary; `apt` stays required for every catalog today.
-const CHANNELS = { apt: APT_ARCHES, rpm: RPM_ARCHES, apk: APK_ARCHES, nix: NIX_SYSTEMS };
+const CHANNELS = { apt: APT_ARCHES, rpm: RPM_ARCHES, apk: APK_ARCHES, nix: NIX_SYSTEMS, scoop: SCOOP_ARCHES };
 const SIMPLE_NAME = /^[A-Za-z0-9._-]+$/;
 const OWNER_REPO = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 
@@ -41,8 +43,8 @@ export function validateCatalog(catalog) {
   }
   if (!("apt" in catalog.channels)) errors.push('catalog.channels: missing channel "apt"');
   for (const [name, arches] of Object.entries(CHANNELS)) {
-    // Nix release assets are named by platform only (sql-pipe-x86_64-linux), not by version.
-    const versionInName = name !== "nix";
+    // Nix and Scoop release assets are named by platform only (sql-pipe-x86_64-linux), not by version.
+    const versionInName = name !== "nix" && name !== "scoop";
     if (name in catalog.channels) validateChannel(catalog.channels[name], `catalog.channels.${name}`, arches, errors, versionInName);
   }
   return errors;
@@ -51,9 +53,13 @@ export function validateCatalog(catalog) {
 function validateChannel(channel, p, archList, errors, versionInName = true) {
   if (!isPlainObject(channel)) return errors.push(`${p}: must be an object`);
   // architectures is an optional explicit subset for this channel; absent means every architecture of the channel.
-  checkKeys(channel, ["repo", "package", "assets"], p, errors, ["architectures"]);
+  // description and license are manifest text for destinations that need it (Scoop).
+  checkKeys(channel, ["repo", "package", "assets"], p, errors, ["architectures", "description", "license"]);
   if (typeof channel.repo !== "string" || !OWNER_REPO.test(channel.repo)) errors.push(`${p}.repo: must be owner/name`);
   if (typeof channel.package !== "string" || !SIMPLE_NAME.test(channel.package)) errors.push(`${p}.package: must be a simple name`);
+  for (const key of ["description", "license"]) {
+    if (key in channel && (typeof channel[key] !== "string" || channel[key].trim() === "")) errors.push(`${p}.${key}: must be a non-empty string`);
+  }
   if (!isPlainObject(channel.assets)) return errors.push(`${p}.assets: must be an object`);
   let arches = archList;
   if ("architectures" in channel) {
