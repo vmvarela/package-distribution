@@ -7,10 +7,10 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { EXIT, PublishError, decideAction, downloadRelease, nextArchitectures, parseSha256Sums, parseVersion, sha256 } from "./apt-publish.mjs";
-import { validateCatalog } from "./validate-catalog.mjs";
+import { RPM_ARCHES, validateCatalog } from "./validate-catalog.mjs";
 
 const run = promisify(execFile);
-const ARCHES = ["x86_64", "aarch64"];
+const ARCHES = RPM_ARCHES;
 const NAME = /^[A-Za-z0-9._-]+$/;
 const KEYRING_FILE = "RPM-GPG-KEY-vmvarela";
 
@@ -30,6 +30,8 @@ export function repoFile({ baseUrl }) {
     // Packages are signed by the receiver; the metadata is signed separately. Neither check is optional.
     "gpgcheck=1",
     "repo_gpgcheck=1",
+    // dnf5 downgrades a missing or bad repomd signature to a warning unless this is set, so consumers get it too.
+    "skip_if_unavailable=0",
     `gpgkey=${baseUrl}/${KEYRING_FILE}`,
     "enabled=1",
     "",
@@ -134,10 +136,10 @@ async function signPackage(file, gpgKeyId) {
 
 // rpm 6 reports the signature in stderr as NOKEY and returns "(none)" from the query format, so the package
 // signature is verified the way a client does: import the public key into a private rpmdb and check the file.
-async function openKeyring(gpgKeyId) {
+async function openKeyring(publicKey) {
   const db = await mkdtemp(join(tmpdir(), "rpm-keys-"));
   const pub = join(db, "pub.asc");
-  await writeFile(pub, await gpg(["--armor", "--export", gpgKeyId]));
+  await writeFile(pub, publicKey);
   await rpm(["--dbpath", db, "--import", pub]);
   return db;
 }
@@ -154,6 +156,9 @@ export async function publish({ catalog, version, sourceDir, out, stateDir, arch
   const errors = validateCatalog(catalog);
   if (errors.length) throw new PublishError(errors.join("; "), EXIT.tool);
   if (!gpgKeyId) throw new PublishError("GPG_KEY_ID is required to sign packages and metadata", EXIT.tool);
+  // gpg --export exits 0 with no output for an unknown key id, so fail here instead of at the first signing step.
+  const publicKey = await gpg(["--armor", "--export", gpgKeyId]);
+  if (!publicKey.trim()) throw new PublishError(`gpg has no public key for ${gpgKeyId}: check GPG_KEY_ID`, EXIT.tool);
   const channel = catalog.channels.rpm;
   const selected = selectArches(catalog, arches, testSubset);
   const stateOut = `${out}.state`;
@@ -161,8 +166,8 @@ export async function publish({ catalog, version, sourceDir, out, stateDir, arch
     const rel = relative(resolve(root), resolve(dir));
     return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
   };
-  if (shadow && (inside(out, stateDir) || inside(stateOut, stateDir))) {
-    throw new PublishError("shadow output must not be inside the state directory", EXIT.tool);
+  if (inside(out, stateDir) || inside(stateOut, stateDir)) {
+    throw new PublishError("output must not be inside the state directory", EXIT.tool);
   }
   const states = await readStates(stateDir);
   const state = states.get(channel.package) ?? null;
@@ -212,7 +217,7 @@ export async function publish({ catalog, version, sourceDir, out, stateDir, arch
     plan.set(pkg, next);
   }
 
-  const keyring = await openKeyring(gpgKeyId);
+  const keyring = await openKeyring(publicKey);
   try {
     for (const [pkg, next] of plan) {
       const statePool = join(pkgStateDir(stateOut, pkg), "pool");
@@ -250,7 +255,7 @@ export async function publish({ catalog, version, sourceDir, out, stateDir, arch
       const repomd = join(dir, "repodata", "repomd.xml");
       await gpg(["--local-user", gpgKeyId, "--armor", "--detach-sign", "--output", `${repomd}.asc`, repomd]);
     }
-    await writeFile(join(out, KEYRING_FILE), await gpg(["--armor", "--export", gpgKeyId]));
+    await writeFile(join(out, KEYRING_FILE), publicKey);
     await writeFile(join(out, "vmvarela.repo"), repoFile({ baseUrl: baseUrl ?? defaultBaseUrl(channel.repo) }));
   } finally {
     await rm(keyring, { recursive: true, force: true });

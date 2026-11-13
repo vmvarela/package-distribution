@@ -106,12 +106,13 @@ done
 
 mkdir -p /etc/yum.repos.d
 cp "$D/out/vmvarela.repo" /etc/yum.repos.d/vmvarela.repo
-# Without skip_if_unavailable=0 dnf5 downgrades a missing or bad repomd signature to a warning and exits 0.
-printf 'sslverify=0\nskip_if_unavailable=0\n' >> /etc/yum.repos.d/vmvarela.repo
+# sslverify is only needed because this run serves plain HTTP on localhost; the signature settings come from the publisher.
+printf 'sslverify=0\n' >> /etc/yum.repos.d/vmvarela.repo
 grep -qx 'gpgcheck=1' /etc/yum.repos.d/vmvarela.repo || fail "installed repo lacks gpgcheck=1"
 grep -qx 'repo_gpgcheck=1' /etc/yum.repos.d/vmvarela.repo || fail "installed repo lacks repo_gpgcheck=1"
 grep -qx 'sslverify=0' /etc/yum.repos.d/vmvarela.repo || fail "installed repo lacks sslverify=0"
-grep -qx 'skip_if_unavailable=0' /etc/yum.repos.d/vmvarela.repo || fail "installed repo lacks skip_if_unavailable=0"
+# dnf5 only warns about a missing repomd signature without this, so the published file must carry it.
+grep -qx 'skip_if_unavailable=0' /etc/yum.repos.d/vmvarela.repo || fail "published repo lacks skip_if_unavailable=0"
 dnf -y clean all >/dev/null
 dnf -y install sql-pipe || fail "dnf install sql-pipe must accept the signature"
 got="$(rpm -q --queryformat '%{VERSION}' sql-pipe)"
@@ -126,9 +127,11 @@ for arch in x86_64 aarch64; do
   rm "$D/out/packages/$arch/repodata/repomd.xml.asc"
 done
 dnf -y clean all >/dev/null
-if dnf -y makecache --disablerepo='*' --enablerepo=vmvarela; then
-  fail "dnf makecache accepted repodata without repomd.xml.asc"
-fi
+out="$(dnf -y makecache --disablerepo='*' --enablerepo=vmvarela 2>&1)" || true
+case "$out" in
+  *[Ss]ignature*|*GPG*) ;;
+  *) fail "dnf makecache failed for another reason: $out" ;;
+esac
 for arch in x86_64 aarch64; do
   gpg --batch --yes --local-user "$GPG_KEY_ID" --armor --detach-sign \
     --output "$D/out/packages/$arch/repodata/repomd.xml.asc" \
@@ -149,7 +152,11 @@ gpg --batch --yes --local-user "$GPG_KEY_ID" --armor --detach-sign \
   --output "$pkgdir/repodata/repomd.xml.asc" "$pkgdir/repodata/repomd.xml"
 dnf -y clean all >/dev/null
 dnf -y remove sql-pipe >/dev/null || fail "dnf remove sql-pipe"
-if dnf -y install sql-pipe; then fail "dnf installed an unsigned rpm with gpgcheck=1"; fi
+if out="$(dnf -y install sql-pipe 2>&1)"; then fail "dnf installed an unsigned rpm with gpgcheck=1"; fi
+case "$out" in
+  *[Ss]ignature*|*GPG*|*"not signed"*) ;;
+  *) fail "dnf refused for another reason, not the missing signature: $out" ;;
+esac
 rm -rf "$pkgdir" && cp -R "$D/pkgdir-backup" "$pkgdir"
 rm -rf "$D/pkgdir-backup"
 dnf -y clean all >/dev/null

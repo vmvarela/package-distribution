@@ -47,6 +47,8 @@ const cloneGhoten = () => structuredClone(ghoten);
 test("ghoten catalog is valid with an explicit amd64 and arm64 subset", () => {
   assert.deepEqual(validateCatalog(ghoten), []);
   assert.deepEqual(ghoten.channels.apt.architectures, ["amd64", "arm64"]);
+  // ghoten is archived: it stays on APT and must not gain an RPM channel by accident.
+  assert.equal("rpm" in ghoten.channels, false);
 });
 
 test("architecture subset must be non-empty, known and unique", () => {

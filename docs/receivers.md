@@ -88,7 +88,8 @@ Rules specific to RPM:
 
 - `pool/` keeps the exact release asset bytes. The receiver signs a site copy on every publish (`rpm --addsign`), because a signature embeds a creation time and the signed bytes are not reproducible. The noop and same-version checks compare the release asset hash, so repeating a tag stays a noop.
 - Metadata is generated per architecture with `createrepo_c`, and `repodata/repomd.xml` is detached-signed as `repodata/repomd.xml.asc`; that signature is what `repo_gpgcheck=1` verifies.
-- The generated `.repo` sets `gpgcheck=1` and `repo_gpgcheck=1`, and the key is served as `RPM-GPG-KEY-vmvarela`. A missing key is a failure, never an unsigned fallback.
+- The generated `.repo` sets `gpgcheck=1`, `repo_gpgcheck=1` and `skip_if_unavailable=0`, and the key is served as `RPM-GPG-KEY-vmvarela`. Without that last line dnf5 only warns when the metadata signature is missing. A missing key is a failure, never an unsigned fallback.
+- An output inside the state root is refused, with or without `--shadow`. `--shadow` produces a candidate for symmetry with APT but there is no RPM comparator: signed package bytes embed a timestamp, so sites are not byte-comparable.
 - Both retained versions stay in the architecture directory and in the metadata, so the previous version remains installable. APT indexes only the newest version; the difference is intentional.
 
 ## 4. Triggering
