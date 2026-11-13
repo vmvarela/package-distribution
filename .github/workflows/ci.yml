@@ -82,3 +82,26 @@ jobs:
         env:
           RPM_E2E_RPMS: ${{ runner.temp }}/rpm-test
         run: scripts/e2e-rpm-docker.sh
+
+  apk-e2e:
+    name: APK publisher and Docker end-to-end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Fetch pinned sql-pipe and damas inputs
+        env:
+          APK_E2E_APKS: /tmp/apk-test
+        run: scripts/fetch-e2e-apks.sh
+      # apk-tools and abuild ship with Alpine and the runner has neither, so the tests run in the image
+      # the receiver targets instead of installing a foreign toolchain.
+      - name: APK publisher tests (no skips)
+        run: |
+          docker run --rm -v "$PWD":/w -v /tmp/apk-test:/fixtures:ro -w /w \
+            -e APK_E2E_APKS=/fixtures -e APK_PUBLISH_TEST_REQUIRE_TOOLS=1 \
+            alpine:latest sh -c 'apk add --no-cache nodejs apk-tools abuild openssl tar >/dev/null && node --test test/apk-publish.test.mjs'
+      - name: Run e2e in alpine:latest
+        env:
+          APK_E2E_APKS: /tmp/apk-test
+        run: scripts/e2e-apk-docker.sh

@@ -42,7 +42,6 @@ Tests: `node --test test/apt-publish.test.mjs` skips the signing and metadata ca
 
 ```sh
 GPG_KEY_ID=<key> node scripts/rpm-publish.mjs --catalog catalog/sql-pipe.json --version X.Y.Z \
-  --source <dir> --out <new-dir> --state <state-root> [--base-url <url>] [--shadow] [--force]
 ```
 
 - The site carries `packages/<x86_64|aarch64>/`, `repodata/repomd.xml.asc`, `RPM-GPG-KEY-vmvarela` and `vmvarela.repo` with `gpgcheck=1`, `repo_gpgcheck=1` and `skip_if_unavailable=0`, which dnf5 needs to treat a missing metadata signature as an error. `--base-url` defaults to the channel repository's Pages URL.
@@ -53,7 +52,23 @@ GPG_KEY_ID=<key> node scripts/rpm-publish.mjs --catalog catalog/sql-pipe.json --
 - Tests: `node --test test/rpm-publish.test.mjs` skips the publish cases unless those tools are installed and `scripts/fetch-e2e-rpms.sh` has placed the pinned fixtures in `$RPM_E2E_RPMS`. Set `RPM_PUBLISH_TEST_REQUIRE_TOOLS=1` to fail instead.
 - `scripts/e2e-rpm-docker.sh` repeats the scenario in `fedora:latest`: publish sql-pipe, publish damas over the resulting state, `dnf install` with both signature checks, and the unsigned and downgrade refusals. Publication to `vmvarela/rpm-packages` is a separate change in that repository.
 
-CI (`.github/workflows/ci.yml`): syntax checks, catalog tests and validation, publisher tests with `APT_PUBLISH_TEST_REQUIRE_TOOLS=1`, and the APT Docker e2e on one job, plus the RPM publisher tests and Docker e2e on another. Both have read-only permissions and no secrets.
+## APK receiver (local)
+
+`scripts/apk-publish.mjs` builds a signed APK repository for one catalog entry from a verified stable release. Same catalog and durable-state shape as the other receivers (`channels.apk`, `state/<package>/`), with `x86_64` and `aarch64`.
+
+```sh
+APK_SIGNING_KEY="$(cat vmvarela.rsa)" node scripts/apk-publish.mjs --catalog catalog/sql-pipe.json --version X.Y.Z \
+  --source <dir> --out <new-dir> --state <state-root> [--shadow] [--force]
+```
+
+- The site carries `<x86_64|aarch64>/<name>-<version>.apk`, `<arch>/APKINDEX.tar.gz` signed with `abuild-sign`, and `vmvarela.rsa.pub`. Clients copy that key into `/etc/apk/keys/` and then install with a plain `apk add`: producers ship unsigned packages, and Alpine trusts them through the signed index checksum, so no `--allow-untrusted` is needed.
+- apk derives the package URL from the index, so the site file is `<name>-<version>.apk` while `pool/` keeps the release asset name (`<name>_<version>_<arch>.apk`).
+- Requires `apk`, `abuild-sign`, `openssl` and `tar`. They ship with Alpine (`apk-tools`, `abuild`), so the tests and the e2e run in an `alpine:latest` container. A missing key is a failure, never an unsigned fallback.
+- `catalog/ghoten.json` has no APK channel either: archived, kept that way by the catalog test.
+- Tests: `node --test test/apk-publish.test.mjs` skips the publish cases unless those tools are installed and `scripts/fetch-e2e-apks.sh` has placed the pinned fixtures in `$APK_E2E_APKS`. Set `APK_PUBLISH_TEST_REQUIRE_TOOLS=1` to fail instead.
+- `scripts/e2e-apk-docker.sh` repeats the scenario in `alpine:latest`: publish sql-pipe, publish damas over the resulting state, `apk add` both without `--allow-untrusted`, and the refusals for an unsigned index and a missing key.
+
+CI (`.github/workflows/ci.yml`): syntax checks, catalog tests and validation, publisher tests with `APT_PUBLISH_TEST_REQUIRE_TOOLS=1`, and the APT Docker e2e on one job, plus the RPM publisher tests and Docker e2e on another, and the APK publisher tests and Docker e2e in an Alpine job. All have read-only permissions and no secrets.
 
 Remaining:
 

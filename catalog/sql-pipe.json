@@ -21,6 +21,14 @@
         "x86_64": "sql-pipe-{version}-1.x86_64.rpm",
         "aarch64": "sql-pipe-{version}-1.aarch64.rpm"
       }
+    },
+    "apk": {
+      "repo": "vmvarela/apk-packages",
+      "package": "sql-pipe",
+      "assets": {
+        "x86_64": "sql-pipe_{version}_x86_64.apk",
+        "aarch64": "sql-pipe_{version}_aarch64.apk"
+      }
     }
   }
 }

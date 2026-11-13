@@ -1,6 +1,6 @@
 # Shared package receivers: design
 
-Status: design in progress. Implemented: the APT publisher (`scripts/apt-publish.mjs`), its unit tests and the Docker e2e (`scripts/e2e-apt-docker.sh`), and the RPM publisher (`scripts/rpm-publish.mjs`) with its tests and Docker e2e (`scripts/e2e-rpm-docker.sh`), all run in CI on Linux. Pending: real publication, GitHub Pages, promotion, and the APK, Nix and Scoop receivers.
+Status: design in progress. Implemented: the APT publisher (`scripts/apt-publish.mjs`), its unit tests and the Docker e2e (`scripts/e2e-apt-docker.sh`), the RPM publisher (`scripts/rpm-publish.mjs`) with its tests and Docker e2e (`scripts/e2e-rpm-docker.sh`), and the APK publisher (`scripts/apk-publish.mjs`) with its tests and Docker e2e (`scripts/e2e-apk-docker.sh`), all run in CI on Linux. APT and RPM are live. Pending: real publication of APK, and the Nix and Scoop receivers.
 
 ## 1. Current problem
 
@@ -92,6 +92,19 @@ Rules specific to RPM:
 - An output inside the state root is refused, with or without `--shadow`. `--shadow` produces a candidate for symmetry with APT but there is no RPM comparator: signed package bytes embed a timestamp, so sites are not byte-comparable.
 - Both retained versions stay in the architecture directory and in the metadata, so the previous version remains installable. APT indexes only the newest version; the difference is intentional.
 
+## 3c. APK durable state
+
+Same layout as section 3a, in `vmvarela/apk-packages`: `state/<package>/state.json` and `state/<package>/pool/<file>.apk`, with `x86_64` and `aarch64`.
+
+Rules specific to APK:
+
+- Producers ship unsigned `.apk` files (nfpm writes `.PKGINFO`, no `.SIGN.RSA.*`). Alpine trusts a package through the signed index that lists it, by the index checksum, so the receiver signs only `<arch>/APKINDEX.tar.gz` with `abuild-sign`. Installing without `--allow-untrusted` proves the chain works.
+- The index is generated with `apk --allow-untrusted index --rewrite-arch <arch>` because the input packages carry no signature of their own, then signed: `abuild-sign -k <private key> -p vmvarela.rsa.pub` prepends `.SIGN.RSA.vmvarela.rsa.pub` as the first tar member, and the publisher refuses an index whose first member is anything else, then verifies that signature against the unsigned index bytes before publishing.
+- `abuild-sign` needs the absolute path to the private key and fails silently with `-q`; both are enforced in the publisher.
+- apk derives the package URL from `P:` and `V:` in the index, so the site serves `<name>-<version>.apk` while `pool/` keeps the release asset name (`<name>_<version>_<arch>.apk`). Serving the release name would 404.
+- The public key is derived from the private one with `openssl rsa -pubout` and published as `vmvarela.rsa.pub` at the site root; clients copy it into `/etc/apk/keys/`. A missing key is a failure, never an unsigned fallback.
+- The `.complete` marker, state validation, output-inside-state guard and `--force` behave exactly as in RPM.
+
 ## 4. Triggering
 
 Agreed by the user:
@@ -142,7 +155,8 @@ Phase 1, one channel (APT, sql-pipe and ghoten):
 Phase 2, RPM, APK, Nix, Scoop:
 
 - RPM: `createrepo_c` metadata, package and metadata signatures, and a real `dnf install` with `gpgcheck=1` and `repo_gpgcheck=1` (`scripts/e2e-rpm-docker.sh`).
-- `apk add` on Alpine, `nix profile install` from the flake, `scoop install` on Windows runner, and `brew` where applicable.
+- APK: signed index and a real `apk add` on Alpine without `--allow-untrusted`, plus a refusal when the index is unsigned or the key is not installed (`scripts/e2e-apk-docker.sh`).
+- `nix profile install` from the flake, `scoop install` on Windows runner, and `brew` where applicable.
 
 Negative tests in every phase:
 
