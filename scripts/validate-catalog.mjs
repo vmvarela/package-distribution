@@ -4,8 +4,9 @@ import { pathToFileURL } from "node:url";
 
 const APT_ARCHES = ["amd64", "arm64", "armhf", "i386"];
 export const RPM_ARCHES = ["x86_64", "aarch64"];
+export const APK_ARCHES = ["x86_64", "aarch64"];
 // Each channel validates against its own architecture vocabulary; `apt` stays required for every catalog today.
-const CHANNELS = { apt: APT_ARCHES, rpm: RPM_ARCHES };
+const CHANNELS = { apt: APT_ARCHES, rpm: RPM_ARCHES, apk: APK_ARCHES };
 const SIMPLE_NAME = /^[A-Za-z0-9._-]+$/;
 const OWNER_REPO = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 
