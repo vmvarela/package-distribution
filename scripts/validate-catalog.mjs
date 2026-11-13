@@ -5,8 +5,10 @@ import { pathToFileURL } from "node:url";
 const APT_ARCHES = ["amd64", "arm64", "armhf", "i386"];
 export const RPM_ARCHES = ["x86_64", "aarch64"];
 export const APK_ARCHES = ["x86_64", "aarch64"];
+// Nix systems are not architectures: the receiver writes one versions.json per package, keyed by these.
+export const NIX_SYSTEMS = ["x86_64-linux", "aarch64-linux", "x86_64-darwin", "aarch64-darwin"];
 // Each channel validates against its own architecture vocabulary; `apt` stays required for every catalog today.
-const CHANNELS = { apt: APT_ARCHES, rpm: RPM_ARCHES, apk: APK_ARCHES };
+const CHANNELS = { apt: APT_ARCHES, rpm: RPM_ARCHES, apk: APK_ARCHES, nix: NIX_SYSTEMS };
 const SIMPLE_NAME = /^[A-Za-z0-9._-]+$/;
 const OWNER_REPO = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 
@@ -39,12 +41,14 @@ export function validateCatalog(catalog) {
   }
   if (!("apt" in catalog.channels)) errors.push('catalog.channels: missing channel "apt"');
   for (const [name, arches] of Object.entries(CHANNELS)) {
-    if (name in catalog.channels) validateChannel(catalog.channels[name], `catalog.channels.${name}`, arches, errors);
+    // Nix release assets are named by platform only (sql-pipe-x86_64-linux), not by version.
+    const versionInName = name !== "nix";
+    if (name in catalog.channels) validateChannel(catalog.channels[name], `catalog.channels.${name}`, arches, errors, versionInName);
   }
   return errors;
 }
 
-function validateChannel(channel, p, archList, errors) {
+function validateChannel(channel, p, archList, errors, versionInName = true) {
   if (!isPlainObject(channel)) return errors.push(`${p}: must be an object`);
   // architectures is an optional explicit subset for this channel; absent means every architecture of the channel.
   checkKeys(channel, ["repo", "package", "assets"], p, errors, ["architectures"]);
@@ -73,7 +77,7 @@ function validateChannel(channel, p, archList, errors) {
       errors.push(`${p}.assets.${arch}: required string`);
       continue;
     }
-    if (!template.includes("{version}")) errors.push(`${p}.assets.${arch}: must contain {version}`);
+    if (versionInName && !template.includes("{version}")) errors.push(`${p}.assets.${arch}: must contain {version}`);
     if (!SIMPLE_NAME.test(template.replaceAll("{version}", "0"))) errors.push(`${p}.assets.${arch}: must be a simple file name`);
   }
 }
