@@ -46,8 +46,8 @@ test("rejects rpm architectures outside the channel vocabulary", () => {
   assert.match(validateCatalog(subset).join("\n"), /channels\.rpm\.assets: unknown architecture "aarch64"/);
 
   const unknownChannel = structuredClone(sqlPipe);
-  unknownChannel.channels.scoop = { repo: "vmvarela/scoop-bucket", package: "sql-pipe", assets: {} };
-  assert.match(validateCatalog(unknownChannel).join("\n"), /unknown channel "scoop"/);
+  unknownChannel.channels.brew = { repo: "vmvarela/homebrew-tap", package: "sql-pipe", assets: {} };
+  assert.match(validateCatalog(unknownChannel).join("\n"), /unknown channel "brew"/);
 });
 
 test("architectures are selected from the rpm channel only", () => {
