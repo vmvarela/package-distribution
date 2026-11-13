@@ -1,6 +1,6 @@
 # Shared package receivers: design
 
-Status: design in progress. Implemented: the APT publisher (`scripts/apt-publish.mjs`), its unit tests and the Docker e2e (`scripts/e2e-apt-docker.sh`), the RPM publisher (`scripts/rpm-publish.mjs`) with its tests and Docker e2e (`scripts/e2e-rpm-docker.sh`), the APK publisher (`scripts/apk-publish.mjs`) with its tests and Docker e2e (`scripts/e2e-apk-docker.sh`), and the Nix receiver (`scripts/nix-publish.mjs`) with unit tests, all run in CI on Linux. APT, RPM, APK and Nix are live. Pending: the Scoop receiver.
+Status: design in progress. Implemented: the APT publisher (`scripts/apt-publish.mjs`), its unit tests and the Docker e2e (`scripts/e2e-apt-docker.sh`), the RPM publisher (`scripts/rpm-publish.mjs`) with its tests and Docker e2e (`scripts/e2e-rpm-docker.sh`), the APK publisher (`scripts/apk-publish.mjs`) with its tests and Docker e2e (`scripts/e2e-apk-docker.sh`), the Nix receiver (`scripts/nix-publish.mjs`) with unit tests, and the Scoop receiver (`scripts/scoop-publish.mjs`) with unit tests, all run in CI on Linux. APT, RPM, APK and Nix are live. Pending: the Scoop cutover.
 
 ## 1. Current problem
 
@@ -12,7 +12,7 @@ Facts checked against the default branches of each repository on the day of writ
 | `vmvarela/rpm-packages` (`update.yml`) | `update-sql-pipe` only | Asset downloads use `curl ... 2>/dev/null` inside `if`, so a failed download is skipped silently. GPG signing is optional (warning if key missing). Generated `.repo` sets `gpgcheck=0` and `repo_gpgcheck=1`. |
 | `vmvarela/apk-packages` (`update.yml`) | `update-sql-pipe` only | Downloads use `curl ... 2>/dev/null` inside `if`; failures are skipped silently. Index signing is optional. Index generation uses `--allow-untrusted`. |
 | `vmvarela/nix-packages` (`update.yml`) | `update-sql-pipe`, `update-damas` | The single writer: it regenerates `versions.json` with the shared publisher. Producers only dispatch; they no longer push the file. |
-| `vmvarela/scoop-bucket` | none | Holds `bucket/damas.json` and `bucket/sql-pipe.json`. No receiver workflow. |
+| `vmvarela/scoop-bucket` | none | Holds `bucket/damas.json` and `bucket/sql-pipe.json`. No receiver workflow: the manifests are written by each producer's `update-scoop` job. |
 | `vmvarela/damas` | dispatches `update-damas` | No receiver exists for that event. Not re-verified in this pass. |
 
 Consequences: partial failures can publish incomplete or unsigned repositories without an error; there is no shared definition of which assets a channel needs; each receiver encodes its own event names and version logic.
@@ -25,7 +25,7 @@ Fields (as implemented by `catalog/sql-pipe.json` and `scripts/validate-catalog.
 
 - `repo`: source repository, e.g. `vmvarela/sql-pipe`.
 - `checksums`: name of the checksum asset (`sha256sums.txt`) that every asset must match.
-- `channels`: per channel, the target repository and `assets` (architecture to file name template with `{version}`). Only `apt` is defined today.
+- `channels`: per channel, the target repository and `assets` (architecture to file name template with `{version}`). Defined: `apt`, `rpm`, `apk`, `nix` and `scoop`. `nix` and `scoop` assets carry no `{version}` because their release file names do not include it, and `scoop` also carries `description` and `license` for the manifest.
 - `channels.apt.architectures` (optional): explicit subset of `amd64`, `arm64`, `armhf`, `i386`. Must be non-empty, unique, and match the keys of `assets` exactly. Absent means all four, as for `sql-pipe`. `ghoten` declares `amd64` and `arm64` only.
 
 Phase 1 covers `sql-pipe` and `ghoten`, APT only.
@@ -117,6 +117,17 @@ Rules specific to Nix:
 - Going back to an older release is refused (exit 2) unless `--force` is passed; re-running the same tag is a `noop` and writes nothing.
 - Nothing is signed and nothing is copied: `fetchurl` downloads the release asset and checks the `sha256` recorded here. Every asset is still downloaded and hashed against the release `sha256sums.txt` before the file is written.
 
+## 3e. Scoop durable state
+
+Same shape as section 3d, in `vmvarela/scoop-bucket`: `state/<package>/state.json` and the manifest at `bucket/<package>.json`. No pool, no retention, no signing; the channel has its own architecture vocabulary (`64bit`, `32bit`, `arm64`) because those are the keys a Scoop manifest uses.
+
+Rules specific to Scoop:
+
+- `catalog/*.json` carries the `description` and `license` the manifest needs, so the catalog stays the only source of package metadata.
+- Assets are raw executables with no version in the name, so each architecture's URL is built from the version recorded for that architecture, not from the release being published. A release that omits one Windows architecture keeps the previous version and its previous URL for it.
+- The manifest is byte-identical to what the producers wrote before the cutover (same key order, four-space indent, `#/<package>.exe` URL fragment, `checkver: github` and the `autoupdate` block with the literal `$version` placeholder), which is what makes the writer swap invisible to `scoop install`.
+- No signature: a Scoop bucket trusts the repository, and the hash in the manifest is what protects the download.
+
 ## 4. Triggering
 
 Agreed by the user:
@@ -169,7 +180,9 @@ Phase 2, RPM, APK, Nix, Scoop:
 - RPM: `createrepo_c` metadata, package and metadata signatures, and a real `dnf install` with `gpgcheck=1` and `repo_gpgcheck=1` (`scripts/e2e-rpm-docker.sh`).
 - APK: signed index and a real `apk add` on Alpine without `--allow-untrusted`, plus a refusal when the index is unsigned or the key is not installed (`scripts/e2e-apk-docker.sh`).
 - Nix: `versions.json` shape, carry-forward of missing systems, noop, `--force` and downgrade refusal with synthetic fixtures (`test/nix-publish.test.mjs`), plus one real `--source github` run against a published release.
-- `nix profile install` from the flake, `scoop install` on Windows runner, and `brew` where applicable.
+- Nix: the receiver regenerates `versions.json` byte for byte from the release checksums, so the writer swap does not change what clients download (`scripts/nix-publish.mjs` tests).
+- Scoop: the manifest is regenerated byte for byte against the live bucket files (`scripts/scoop-publish.mjs` tests), and `scoop install` on a Windows runner after the cutover.
+- `brew` where applicable.
 
 Negative tests in every phase:
 

@@ -33,8 +33,8 @@ jobs:
         env:
           APT_PUBLISH_TEST_REQUIRE_TOOLS: "1"
         run: node --test test/apt-publish.test.mjs
-      - name: Nix receiver tests
-        run: node --test test/nix-publish.test.mjs
+      - name: Nix and Scoop receiver tests
+        run: node --test test/nix-publish.test.mjs test/scoop-publish.test.mjs
 
   apt-e2e:
     name: APT Docker end-to-end
