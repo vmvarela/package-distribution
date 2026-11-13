@@ -45,10 +45,11 @@ GPG_KEY_ID=<key> node scripts/rpm-publish.mjs --catalog catalog/sql-pipe.json --
   --source <dir> --out <new-dir> --state <state-root> [--base-url <url>] [--shadow] [--force]
 ```
 
-- The site carries `packages/<x86_64|aarch64>/`, `repodata/repomd.xml.asc`, `RPM-GPG-KEY-vmvarela` and `vmvarela.repo` with `gpgcheck=1` and `repo_gpgcheck=1`. `--base-url` defaults to the channel repository's Pages URL.
+- The site carries `packages/<x86_64|aarch64>/`, `repodata/repomd.xml.asc`, `RPM-GPG-KEY-vmvarela` and `vmvarela.repo` with `gpgcheck=1`, `repo_gpgcheck=1` and `skip_if_unavailable=0`, which dnf5 needs to treat a missing metadata signature as an error. `--base-url` defaults to the channel repository's Pages URL.
 - The durable state keeps the exact release asset bytes; the site copy is signed on every publish, because a signature embeds a creation time and is not reproducible. Retention, carry-forward, noop and exit codes match the APT publisher (`2` for a refused version, `3` for a failed verification).
 - Requires `rpm`, `createrepo_c` and `gpg`. Missing tools or a missing key fail the run; there is no unsigned fallback. On Debian and Ubuntu, rpm execs `gpg2`, so link it to `gpg` when that binary is absent.
-- `catalog/ghoten.json` has no RPM channel: ghoten is archived.
+- `catalog/ghoten.json` has no RPM channel: ghoten is archived, and a catalog test keeps it that way.
+- `--force` rebuilds and re-signs a `noop` version. `--shadow` builds a candidate without touching the state root and is accepted for symmetry with APT, but there is no RPM comparator yet: package signatures embed a timestamp, so sites are not byte-comparable.
 - Tests: `node --test test/rpm-publish.test.mjs` skips the publish cases unless those tools are installed and `scripts/fetch-e2e-rpms.sh` has placed the pinned fixtures in `$RPM_E2E_RPMS`. Set `RPM_PUBLISH_TEST_REQUIRE_TOOLS=1` to fail instead.
 - `scripts/e2e-rpm-docker.sh` repeats the scenario in `fedora:latest`: publish sql-pipe, publish damas over the resulting state, `dnf install` with both signature checks, and the unsigned and downgrade refusals. Publication to `vmvarela/rpm-packages` is a separate change in that repository.
 

@@ -63,6 +63,8 @@ test("the repo file requires both signature checks", () => {
   const repo = repoFile({ baseUrl: "https://vmvarela.github.io/rpm-packages" });
   assert.match(repo, /^gpgcheck=1$/m);
   assert.match(repo, /^repo_gpgcheck=1$/m);
+  // Without it dnf5 only warns about a missing repomd signature, so the shipped file must carry it.
+  assert.match(repo, /^skip_if_unavailable=0$/m);
   assert.match(repo, /^baseurl=https:\/\/vmvarela\.github\.io\/rpm-packages\/packages\/\$basearch$/m);
   assert.match(repo, /^gpgkey=https:\/\/vmvarela\.github\.io\/rpm-packages\/RPM-GPG-KEY-vmvarela$/m);
 });
@@ -122,6 +124,21 @@ test(
       assert.match(list, /damas-0\.1\.10-1\.x86_64\.rpm/);
       assert.ok(existsSync(join(root, "o2.state", "sql-pipe", "state.json")), "candidate state keeps every package");
       assert.ok(existsSync(join(root, "o2.state", "damas", "state.json")));
+
+      // Forced rebuild of the same release: a noop that still signs and writes site and candidate state.
+      const forced = await publish({ ...base, catalog: damas, version: "0.1.10", sourceDir: join(FIXTURES, "damas"), out: join(root, "forced"), stateDir: join(root, "o2.state"), force: true });
+      assert.equal(forced.action, "noop");
+      assert.match(readFileSync(join(root, "forced", ".complete"), "utf8"), /^noop 0\.1\.10\n$/);
+      assert.ok(existsSync(join(root, "forced.state", "damas", "state.json")), "forced rebuild keeps the candidate state");
+      const forcedRpm = join(root, "forced", "packages", "x86_64", "damas-0.1.10-1.x86_64.rpm");
+      assert.match(execFileSync("rpmkeys", ["--dbpath", join(root, "rpmdb"), "--checksig", forcedRpm], { encoding: "utf8" }), /signatures OK/);
+
+      // Output inside the state root is refused even without --shadow: it would poison every later read.
+      await expectExit(
+        publish({ ...base, catalog: damas, version: "0.1.10", sourceDir: join(FIXTURES, "damas"), out: join(root, "o2.state", "tmp"), stateDir: join(root, "o2.state") }),
+        EXIT.tool,
+        /inside the state directory/,
+      );
 
       // Same release again: noop, no site and no candidate state.
       const again = await publish({ ...base, catalog: damas, version: "0.1.10", sourceDir: join(FIXTURES, "damas"), out: join(root, "o3"), stateDir: join(root, "o2.state") });
