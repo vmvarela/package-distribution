@@ -1,6 +1,6 @@
 # Shared package receivers: design
 
-Status: design in progress. Implemented: the APT publisher (`scripts/apt-publish.mjs`), its unit tests and the Docker e2e (`scripts/e2e-apt-docker.sh`), the RPM publisher (`scripts/rpm-publish.mjs`) with its tests and Docker e2e (`scripts/e2e-rpm-docker.sh`), the APK publisher (`scripts/apk-publish.mjs`) with its tests and Docker e2e (`scripts/e2e-apk-docker.sh`), and the Nix receiver (`scripts/nix-publish.mjs`) with unit tests, all run in CI on Linux. APT, RPM and APK are live. Pending: the Nix cutover, and the Scoop receiver.
+Status: design in progress. Implemented: the APT publisher (`scripts/apt-publish.mjs`), its unit tests and the Docker e2e (`scripts/e2e-apt-docker.sh`), the RPM publisher (`scripts/rpm-publish.mjs`) with its tests and Docker e2e (`scripts/e2e-rpm-docker.sh`), the APK publisher (`scripts/apk-publish.mjs`) with its tests and Docker e2e (`scripts/e2e-apk-docker.sh`), and the Nix receiver (`scripts/nix-publish.mjs`) with unit tests, all run in CI on Linux. APT, RPM, APK and Nix are live. Pending: the Scoop receiver.
 
 ## 1. Current problem
 
@@ -11,7 +11,7 @@ Facts checked against the default branches of each repository on the day of writ
 | `vmvarela/apt-packages` (`update.yml`) | `update-sql-pipe`, `update-ghoten` | Rebuilds the whole index from scratch for sql-pipe and ghoten. Target mapping sets `ghoten`, but the guard at line ~137 compares against `ghoton`, so the "Ghoten-triggered rebuild requires both DEB packages" check never fires. |
 | `vmvarela/rpm-packages` (`update.yml`) | `update-sql-pipe` only | Asset downloads use `curl ... 2>/dev/null` inside `if`, so a failed download is skipped silently. GPG signing is optional (warning if key missing). Generated `.repo` sets `gpgcheck=0` and `repo_gpgcheck=1`. |
 | `vmvarela/apk-packages` (`update.yml`) | `update-sql-pipe` only | Downloads use `curl ... 2>/dev/null` inside `if`; failures are skipped silently. Index signing is optional. Index generation uses `--allow-untrusted`. |
-| `vmvarela/nix-packages` (`update.yml`) | `update-sql-pipe` only | Rewrites `versions.json` from the release `sha256sums.txt`, while each producer's own release workflow pushes the same file. Two writers, one file. |
+| `vmvarela/nix-packages` (`update.yml`) | `update-sql-pipe`, `update-damas` | The single writer: it regenerates `versions.json` with the shared publisher. Producers only dispatch; they no longer push the file. |
 | `vmvarela/scoop-bucket` | none | Holds `bucket/damas.json` and `bucket/sql-pipe.json`. No receiver workflow. |
 | `vmvarela/damas` | dispatches `update-damas` | No receiver exists for that event. Not re-verified in this pass. |
 
