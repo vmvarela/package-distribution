@@ -36,7 +36,23 @@ Tests: `node --test test/apt-publish.test.mjs` skips the signing and metadata ca
 - `scripts/e2e-apt-docker.sh` repeats the sql-pipe scenario in `debian:stable-slim` (install 0.26.0, upgrade to 0.27.0, refuse downgrade, tampered release, unsigned index, altered pool file). Needs Docker and the `.deb` files; CI runs it (job `apt-e2e`).
 - `scripts/e2e-shadow-docker.sh` runs shadow mode in the same image: builds a live site, a ghoten candidate from the state (ghoten `.deb` files are synthetic, built with `dpkg-deb`, not the public release), checks carry-forward, compare, a tampered pool file, a sql-pipe update that keeps ghoten, and a no-op.
 
-CI (`.github/workflows/ci.yml`): syntax checks, catalog tests and validation, publisher tests with `APT_PUBLISH_TEST_REQUIRE_TOOLS=1`, and the Docker e2e. It has read-only permissions and no secrets.
+## RPM receiver (local)
+
+`scripts/rpm-publish.mjs` builds a signed RPM repository for one catalog entry from a verified stable release. It uses the same catalog and durable-state shape as the APT publisher (`channels.rpm`, `state/<package>/`), verifies every asset against the checksum file and the RPM header, keeps the current and previous version per package and architecture, signs each package with `rpm --addsign`, and generates signed metadata with `createrepo_c`.
+
+```sh
+GPG_KEY_ID=<key> node scripts/rpm-publish.mjs --catalog catalog/sql-pipe.json --version X.Y.Z \
+  --source <dir> --out <new-dir> --state <state-root> [--base-url <url>] [--shadow] [--force]
+```
+
+- The site carries `packages/<x86_64|aarch64>/`, `repodata/repomd.xml.asc`, `RPM-GPG-KEY-vmvarela` and `vmvarela.repo` with `gpgcheck=1` and `repo_gpgcheck=1`. `--base-url` defaults to the channel repository's Pages URL.
+- The durable state keeps the exact release asset bytes; the site copy is signed on every publish, because a signature embeds a creation time and is not reproducible. Retention, carry-forward, noop and exit codes match the APT publisher (`2` for a refused version, `3` for a failed verification).
+- Requires `rpm`, `createrepo_c` and `gpg`. Missing tools or a missing key fail the run; there is no unsigned fallback. On Debian and Ubuntu, rpm execs `gpg2`, so link it to `gpg` when that binary is absent.
+- `catalog/ghoten.json` has no RPM channel: ghoten is archived.
+- Tests: `node --test test/rpm-publish.test.mjs` skips the publish cases unless those tools are installed and `scripts/fetch-e2e-rpms.sh` has placed the pinned fixtures in `$RPM_E2E_RPMS`. Set `RPM_PUBLISH_TEST_REQUIRE_TOOLS=1` to fail instead.
+- `scripts/e2e-rpm-docker.sh` repeats the scenario in `fedora:latest`: publish sql-pipe, publish damas over the resulting state, `dnf install` with both signature checks, and the unsigned and downgrade refusals. Publication to `vmvarela/rpm-packages` is a separate change in that repository.
+
+CI (`.github/workflows/ci.yml`): syntax checks, catalog tests and validation, publisher tests with `APT_PUBLISH_TEST_REQUIRE_TOOLS=1`, and the APT Docker e2e on one job, plus the RPM publisher tests and Docker e2e on another. Both have read-only permissions and no secrets.
 
 Remaining:
 

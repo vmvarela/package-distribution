@@ -53,3 +53,32 @@ jobs:
         env:
           APT_E2E_DEBS: ${{ runner.temp }}/apt-test
         run: scripts/e2e-shadow-docker.sh
+
+  rpm-e2e:
+    name: RPM publisher and Docker end-to-end
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Install rpm, createrepo and gpg
+        run: |
+          sudo apt-get update && sudo apt-get install -y rpm createrepo-c gnupg
+          # Debian's rpm execs gpg2, which the gnupg package does not ship.
+          sudo ln -sf /usr/bin/gpg /usr/bin/gpg2
+      - name: Fetch pinned sql-pipe and damas inputs
+        env:
+          RPM_E2E_RPMS: ${{ runner.temp }}/rpm-test
+        run: scripts/fetch-e2e-rpms.sh
+      - name: RPM publisher tests (no skips)
+        env:
+          RPM_E2E_RPMS: ${{ runner.temp }}/rpm-test
+          RPM_PUBLISH_TEST_REQUIRE_TOOLS: "1"
+        run: node --test test/rpm-publish.test.mjs
+      - name: Run e2e in fedora:latest
+        env:
+          RPM_E2E_RPMS: ${{ runner.temp }}/rpm-test
+        run: scripts/e2e-rpm-docker.sh

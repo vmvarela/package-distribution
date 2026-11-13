@@ -1,6 +1,6 @@
 # Shared package receivers: design
 
-Status: design in progress. Implemented: the APT publisher (`scripts/apt-publish.mjs`), its unit tests and the Docker e2e (`scripts/e2e-apt-docker.sh`), run in CI on Linux. Pending: real publication, GitHub Pages, promotion, and the RPM, APK, Nix and Scoop receivers.
+Status: design in progress. Implemented: the APT publisher (`scripts/apt-publish.mjs`), its unit tests and the Docker e2e (`scripts/e2e-apt-docker.sh`), and the RPM publisher (`scripts/rpm-publish.mjs`) with its tests and Docker e2e (`scripts/e2e-rpm-docker.sh`), all run in CI on Linux. Pending: real publication, GitHub Pages, promotion, and the APK, Nix and Scoop receivers.
 
 ## 1. Current problem
 
@@ -80,6 +80,17 @@ Shadow mode (`--shadow`) builds the candidate from the state root and the trigge
 
 Not part of this change: migrating the existing `apt-packages` layout to this state, the shadow workflow in `apt-packages`, cutover, and the change of the dispatch flow. Those are separate PRs and need explicit approval.
 
+## 3b. RPM durable state
+
+Same layout as section 3a, in `vmvarela/rpm-packages`: `state/<package>/state.json` and `state/<package>/pool/<file>.rpm`, with `x86_64` and `aarch64` instead of the APT architectures.
+
+Rules specific to RPM:
+
+- `pool/` keeps the exact release asset bytes. The receiver signs a site copy on every publish (`rpm --addsign`), because a signature embeds a creation time and the signed bytes are not reproducible. The noop and same-version checks compare the release asset hash, so repeating a tag stays a noop.
+- Metadata is generated per architecture with `createrepo_c`, and `repodata/repomd.xml` is detached-signed as `repodata/repomd.xml.asc`; that signature is what `repo_gpgcheck=1` verifies.
+- The generated `.repo` sets `gpgcheck=1` and `repo_gpgcheck=1`, and the key is served as `RPM-GPG-KEY-vmvarela`. A missing key is a failure, never an unsigned fallback.
+- Both retained versions stay in the architecture directory and in the metadata, so the previous version remains installable. APT indexes only the newest version; the difference is intentional.
+
 ## 4. Triggering
 
 Agreed by the user:
@@ -129,7 +140,8 @@ Phase 1, one channel (APT, sql-pipe and ghoten):
 
 Phase 2, RPM, APK, Nix, Scoop:
 
-- `dnf` install on Fedora container, `apk add` on Alpine, `nix profile install` from the flake, `scoop install` on Windows runner, and `brew` where applicable.
+- RPM: `createrepo_c` metadata, package and metadata signatures, and a real `dnf install` with `gpgcheck=1` and `repo_gpgcheck=1` (`scripts/e2e-rpm-docker.sh`).
+- `apk add` on Alpine, `nix profile install` from the flake, `scoop install` on Windows runner, and `brew` where applicable.
 
 Negative tests in every phase:
 

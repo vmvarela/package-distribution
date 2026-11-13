@@ -3,6 +3,9 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 const APT_ARCHES = ["amd64", "arm64", "armhf", "i386"];
+const RPM_ARCHES = ["x86_64", "aarch64"];
+// Each channel validates against its own architecture vocabulary; `apt` stays required for every catalog today.
+const CHANNELS = { apt: APT_ARCHES, rpm: RPM_ARCHES };
 const SIMPLE_NAME = /^[A-Za-z0-9._-]+$/;
 const OWNER_REPO = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 
@@ -29,42 +32,42 @@ export function validateCatalog(catalog) {
     errors.push("catalog.channels: must be an object");
     return errors;
   }
-  const allowedChannels = ["apt"];
+  const allowedChannels = Object.keys(CHANNELS);
   for (const name of Object.keys(catalog.channels)) {
     if (!allowedChannels.includes(name)) errors.push(`catalog.channels: unknown channel "${name}"`);
   }
   if (!("apt" in catalog.channels)) errors.push('catalog.channels: missing channel "apt"');
-  if ("apt" in catalog.channels) validateApt(catalog.channels.apt, errors);
+  for (const [name, arches] of Object.entries(CHANNELS)) {
+    if (name in catalog.channels) validateChannel(catalog.channels[name], `catalog.channels.${name}`, arches, errors);
+  }
   return errors;
 }
 
-function validateApt(apt, errors) {
-  const p = "catalog.channels.apt";
-  if (!isPlainObject(apt)) return errors.push(`${p}: must be an object`);
-  // architectures is an optional explicit subset for this channel; absent means all four.
-  checkKeys(apt, ["repo", "package", "assets"], p, errors, ["architectures"]);
-  if (typeof apt.repo !== "string" || !OWNER_REPO.test(apt.repo)) errors.push(`${p}.repo: must be owner/name`);
-  if (typeof apt.package !== "string" || !SIMPLE_NAME.test(apt.package)) errors.push(`${p}.package: must be a simple name`);
-  if (!isPlainObject(apt.assets)) return errors.push(`${p}.assets: must be an object`);
-  // Without an explicit subset every APT architecture is required.
-  let arches = APT_ARCHES;
-  if ("architectures" in apt) {
-    const subset = apt.architectures;
+function validateChannel(channel, p, archList, errors) {
+  if (!isPlainObject(channel)) return errors.push(`${p}: must be an object`);
+  // architectures is an optional explicit subset for this channel; absent means every architecture of the channel.
+  checkKeys(channel, ["repo", "package", "assets"], p, errors, ["architectures"]);
+  if (typeof channel.repo !== "string" || !OWNER_REPO.test(channel.repo)) errors.push(`${p}.repo: must be owner/name`);
+  if (typeof channel.package !== "string" || !SIMPLE_NAME.test(channel.package)) errors.push(`${p}.package: must be a simple name`);
+  if (!isPlainObject(channel.assets)) return errors.push(`${p}.assets: must be an object`);
+  let arches = archList;
+  if ("architectures" in channel) {
+    const subset = channel.architectures;
     if (!Array.isArray(subset) || subset.length === 0) {
       errors.push(`${p}.architectures: must be a non-empty array`);
     } else {
       for (const arch of subset) {
-        if (!APT_ARCHES.includes(arch)) errors.push(`${p}.architectures: unknown architecture "${arch}"`);
+        if (!archList.includes(arch)) errors.push(`${p}.architectures: unknown architecture "${arch}"`);
       }
       if (new Set(subset).size !== subset.length) errors.push(`${p}.architectures: duplicate architecture`);
-      if (subset.every((arch) => APT_ARCHES.includes(arch))) arches = subset;
+      if (subset.every((arch) => archList.includes(arch))) arches = subset;
     }
   }
-  for (const arch of Object.keys(apt.assets)) {
+  for (const arch of Object.keys(channel.assets)) {
     if (!arches.includes(arch)) errors.push(`${p}.assets: unknown architecture "${arch}"`);
   }
   for (const arch of arches) {
-    const template = apt.assets[arch];
+    const template = channel.assets[arch];
     if (typeof template !== "string") {
       errors.push(`${p}.assets.${arch}: required string`);
       continue;
