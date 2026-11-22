@@ -101,6 +101,7 @@ CI (`.github/workflows/ci.yml`): syntax checks, catalog tests and validation, pu
 
 Remaining:
 
+- Every receiver pins this repository with `PACKAGE_DISTRIBUTION_SHA`. After a catalog or publisher change merges here, bump each receiver's pin to the merge commit before the new entry can be dispatched; keep the pins full SHAs, never a branch.
 - Durable state lives in `vmvarela/apt-packages`, not here. Its migration, the shadow workflow there, cutover and the dispatch change are separate later PRs, pending approval.
 - The publish step is a TOCTOU window between reading the state and writing: no regression test yet.
 - `--source github` is not exercised against the live API.

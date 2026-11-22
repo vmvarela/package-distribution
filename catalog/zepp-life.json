@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "project": "zepp-life",
+  "repo": "vmvarela/zepp-life",
+  "checksums": "sha256sums.txt",
+  "channels": {
+    "apt": {
+      "repo": "vmvarela/apt-packages",
+      "package": "zepp-life",
+      "architectures": ["amd64", "arm64"],
+      "assets": {
+        "amd64": "zepp-life_{version}_amd64.deb",
+        "arm64": "zepp-life_{version}_arm64.deb"
+      }
+    },
+    "rpm": {
+      "repo": "vmvarela/rpm-packages",
+      "package": "zepp-life",
+      "assets": {
+        "x86_64": "zepp-life-{version}-1.x86_64.rpm",
+        "aarch64": "zepp-life-{version}-1.aarch64.rpm"
+      }
+    },
+    "apk": {
+      "repo": "vmvarela/apk-packages",
+      "package": "zepp-life",
+      "assets": {
+        "x86_64": "zepp-life_{version}_x86_64.apk",
+        "aarch64": "zepp-life_{version}_aarch64.apk"
+      }
+    },
+    "nix": {
+      "repo": "vmvarela/nix-packages",
+      "package": "zepp-life",
+      "assets": {
+        "x86_64-linux": "zepp-life-linux-amd64",
+        "aarch64-linux": "zepp-life-linux-arm64",
+        "x86_64-darwin": "zepp-life-darwin-amd64",
+        "aarch64-darwin": "zepp-life-darwin-arm64"
+      }
+    },
+    "scoop": {
+      "repo": "vmvarela/scoop-bucket",
+      "package": "zepp-life",
+      "description": "Sync Zepp Life activity and body measurements into a local SQLite database",
+      "license": "MIT",
+      "architectures": ["64bit", "arm64"],
+      "assets": {
+        "64bit": "zepp-life-windows-amd64.exe",
+        "arm64": "zepp-life-windows-arm64.exe"
+      }
+    }
+  }
+}
