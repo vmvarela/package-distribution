@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "project": "ztd",
+  "repo": "vmvarela/ztd",
+  "checksums": "sha256sums.txt",
+  "channels": {
+    "apt": {
+      "repo": "vmvarela/apt-packages",
+      "package": "ztd",
+      "architectures": [
+        "amd64",
+        "arm64",
+        "armhf",
+        "i386"
+      ],
+      "assets": {
+        "amd64": "ztd_{version}_amd64.deb",
+        "arm64": "ztd_{version}_arm64.deb",
+        "armhf": "ztd_{version}_armhf.deb",
+        "i386": "ztd_{version}_i386.deb"
+      }
+    },
+    "rpm": {
+      "repo": "vmvarela/rpm-packages",
+      "package": "ztd",
+      "assets": {
+        "x86_64": "ztd-{version}-1.x86_64.rpm",
+        "aarch64": "ztd-{version}-1.aarch64.rpm"
+      }
+    },
+    "apk": {
+      "repo": "vmvarela/apk-packages",
+      "package": "ztd",
+      "assets": {
+        "x86_64": "ztd_{version}_x86_64.apk",
+        "aarch64": "ztd_{version}_aarch64.apk"
+      }
+    },
+    "nix": {
+      "repo": "vmvarela/nix-packages",
+      "package": "ztd",
+      "assets": {
+        "x86_64-linux": "ztd-x86_64-linux",
+        "aarch64-linux": "ztd-aarch64-linux",
+        "x86_64-darwin": "ztd-x86_64-macos",
+        "aarch64-darwin": "ztd-aarch64-macos"
+      }
+    },
+    "scoop": {
+      "repo": "vmvarela/scoop-bucket",
+      "package": "ztd",
+      "description": "Local task system for humans and agents",
+      "license": "MIT",
+      "assets": {
+        "64bit": "ztd-x86_64-windows.exe",
+        "32bit": "ztd-x86-windows.exe",
+        "arm64": "ztd-aarch64-windows.exe"
+      }
+    }
+  }
+}
