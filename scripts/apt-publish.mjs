@@ -367,12 +367,15 @@ export async function downloadRelease({ repo, version, names }) {
 
 const ATTEMPTS = 3;
 
-async function fetchBytes(url) {
+async function fetchBytes(url, headers) {
   let last;
   for (let i = 0; i < ATTEMPTS; i++) {
     try {
-      const res = await fetch(url, { redirect: "follow" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const res = await fetch(url, { redirect: "follow", headers });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status} ${body.slice(0, 200).replace(/\s+/g, " ")}`.trim());
+      }
       return Buffer.from(await res.arrayBuffer());
     } catch (e) {
       last = e;
@@ -382,7 +385,9 @@ async function fetchBytes(url) {
 }
 
 async function fetchJson(url) {
-  return JSON.parse((await fetchBytes(url)).toString("utf8"));
+  const headers = { Accept: "application/vnd.github+json" };
+  if (process.env.GH_TOKEN) headers.Authorization = `Bearer ${process.env.GH_TOKEN}`;
+  return JSON.parse((await fetchBytes(url, headers)).toString("utf8"));
 }
 
 function parseArgs(argv) {
