@@ -363,6 +363,29 @@ test("github source removes its temp dir when an asset is missing", async () => 
   assert.equal(tmpPublishDirs(), before);
 });
 
+test("github source authenticates API calls and reports the HTTP error body", async () => {
+  const original = globalThis.fetch;
+  const token = process.env.GH_TOKEN;
+  const seen = [];
+  process.env.GH_TOKEN = "test-token";
+  globalThis.fetch = async (url, init) => {
+    seen.push(init?.headers);
+    return new Response("API rate limit exceeded for 1.2.3.4", { status: 403 });
+  };
+  try {
+    await assert.rejects(
+      downloadRelease({ repo: "o/r", version: "0.27.0", names: [] }),
+      /HTTP 403 .*rate limit/,
+    );
+  } finally {
+    globalThis.fetch = original;
+    if (token === undefined) delete process.env.GH_TOKEN;
+    else process.env.GH_TOKEN = token;
+  }
+  assert.equal(seen[0].Authorization, "Bearer test-token");
+  assert.equal(seen.length, 3, "the failed API call is retried");
+});
+
 // Multi-package state: sql-pipe (four arches) and ghoten (amd64 and arm64 only) share one site and one state root.
 const ghotenCatalog = JSON.parse(readFileSync(new URL("../catalog/ghoten.json", import.meta.url), "utf8"));
 const fileFor = (cat, arch, version) => cat.channels.apt.assets[arch].replace("{version}", version);
